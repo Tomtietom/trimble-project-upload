@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen — At Fielt</title>
+<!-- BUILD: v4 — 2026-04-15 -->
+<script>window.__BUILD_VERSION__ = 'v4-2026-04-15';</script>
 
 <!-- Trimble Connect Workspace API -->
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
@@ -227,6 +232,7 @@ let nextQueueId = 1;
 //  Init
 // ============================================================
 async function init() {
+  console.log('[upload] BUILD:', window.__BUILD_VERSION__ || 'unknown');
   const apiLib = await waitForWorkspaceAPI(10000);
   tcAPI = await apiLib.connect(window.parent, function (event, data) {
     if (data && (data.type === 'token' || event === 'extension.accessToken')) {

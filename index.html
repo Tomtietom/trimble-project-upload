@@ -243,6 +243,26 @@ async function init() {
 
   tcProject = await tcAPI.project.getCurrentProject();
 
+  // Registreer sidebar menu-item — zonder deze call verschijnt er niks in het TC menu
+  const menuDef = {
+    title: 'Projectinformatie toevoegen',
+    icon: 'https://tomtietom.github.io/trimble-project-upload/icon.png',
+    command: 'open_project_upload'
+  };
+  try {
+    if (tcAPI.ui && typeof tcAPI.ui.setMenu === 'function') {
+      tcAPI.ui.setMenu(menuDef);
+      console.log('[upload] menu geregistreerd via tcAPI.ui.setMenu');
+    } else if (tcAPI.extension && typeof tcAPI.extension.setMenu === 'function') {
+      tcAPI.extension.setMenu(menuDef);
+      console.log('[upload] menu geregistreerd via tcAPI.extension.setMenu');
+    } else {
+      console.warn('[upload] setMenu API niet gevonden op tcAPI');
+    }
+  } catch (e) {
+    console.warn('[upload] menu registreren mislukt:', e.message);
+  }
+
   const loc = (tcProject.location || 'europe').toLowerCase();
   if (loc.includes('america') || loc.includes('north')) TC_API_BASE = TC_API_REGIONS['north america'];
   else if (loc.includes('asia')) TC_API_BASE = TC_API_REGIONS.asia;

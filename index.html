@@ -314,72 +314,77 @@ async function tcFetch(path, opts) {
 //  Folder tree + schrijfrechten filter
 // ============================================================
 async function fetchWritableFolders() {
-  // 1. Root folder ID ophalen via project
-  const proj = await tcFetch('/projects/' + tcProject.id);
-  const rootId = proj.rootFolderId || proj.rootFolder?.id || proj.root?.id;
-  if (!rootId) throw new Error('Kon root folder niet vinden op project');
-
-  // 2. Recursief de folder tree aflopen
-  const result = [];
-  const visited = new Set();
-
-  async function walk(folderId, pathParts, depth) {
-    if (visited.has(folderId)) return;
-    visited.add(folderId);
-    if (depth > 20) return; // veiligheid
-
-    // Folder details + items ophalen
-    let folder;
+  // 1. Root folder ID ophalen — TC gebruikt "rootId" op het project object
+  let rootId = null;
+  try {
+    const proj = await tcFetch('/projects/' + tcProject.id);
+    console.log('[upload] project keys:', Object.keys(proj));
+    rootId = proj.rootId || proj.rootFolderId || proj.rootFolder?.id || proj.root?.id;
+  } catch (e) {
+    console.warn('[upload] project fetch mislukt:', e.message);
+  }
+  // Fallback: haal folders op met projectId filter en zoek de root (zonder parentId)
+  if (!rootId) {
     try {
-      folder = await tcFetch('/folders/' + folderId);
-    } catch (e) {
-      console.warn('[walk] folder fetch failed', folderId, e.message);
-      return;
-    }
-
-    const permission = (folder.permission || folder.access || folder.accessLevel || '').toString().toUpperCase();
-    const canWrite = WRITE_LEVELS.has(permission);
-
-    const folderName = folder.name || folder.title || '(naamloos)';
-    const currentPath = depth === 0 ? [] : pathParts.concat(folderName);
-
-    // Alleen niet-root folders toevoegen waar we mogen schrijven
-    if (canWrite && depth > 0) {
-      result.push({
-        id: folderId,
-        name: folderName,
-        path: currentPath.join(' / '),
-        depth: depth,
-      });
-    }
-
-    // Subfolders ophalen en recursief walken
-    let items = [];
-    try {
-      const resp = await tcFetch('/folders/' + folderId + '/items?items=subFolders');
-      items = resp.items || resp.subFolders || resp || [];
-    } catch (e) {
-      // Fallback: sommige TC versies gebruiken een andere endpoint
-      try {
-        const resp2 = await tcFetch('/folders/' + folderId + '/folders');
-        items = resp2.items || resp2 || [];
-      } catch (e2) {
-        console.warn('[walk] items fetch failed', folderId, e2.message);
+      const folders = await tcFetch('/folders?projectId=' + tcProject.id);
+      if (Array.isArray(folders) && folders.length) {
+        const root = folders.find(f => !f.parentId) || folders[0];
+        rootId = root.id;
       }
+    } catch (e) {
+      console.warn('[upload] folders?projectId fallback mislukt:', e.message);
     }
+  }
+  if (!rootId) throw new Error('Root folder niet gevonden op project');
+  console.log('[upload] root folder:', rootId);
 
-    for (const it of items) {
-      if (!it || !it.id) continue;
-      // Filter op type FOLDER als type-veld aanwezig is
-      if (it.type && it.type !== 'FOLDER' && it.type !== 'folder') continue;
-      await walk(it.id, currentPath, depth + 1);
+  // 2. Breadth-first tree walk (parallel, zoals rechten-viewer)
+  const result = [];
+  let queue = [{ id: rootId, path: [] }];
+  let loggedItemKeys = false;
+
+  while (queue.length) {
+    const batch = queue.splice(0, 20);
+    const batchResults = await Promise.all(batch.map(async ({ id, path }) => {
+      try {
+        const items = await tcFetch('/folders/' + id + '/items');
+        return { path, items: Array.isArray(items) ? items : (items.items || []) };
+      } catch (e) {
+        console.warn('[upload] folder items mislukt:', id, e.message);
+        return { path, items: [] };
+      }
+    }));
+
+    for (const { path, items } of batchResults) {
+      const folders = items.filter(it => (it.type || '').toUpperCase() === 'FOLDER');
+      if (!loggedItemKeys && folders.length) {
+        // Log de eerste folder zodat we zien welk permission-veld beschikbaar is
+        console.log('[upload] sample folder keys:', Object.keys(folders[0]), folders[0]);
+        loggedItemKeys = true;
+      }
+      for (const f of folders) {
+        const currentPath = path.concat(f.name || '(naamloos)');
+        // Probeer permission-velden; als TC er niks geeft tonen we de map wel
+        // (we weten dan niet zeker of write werkt; de upload-call geeft anders 403)
+        const rawPerm = f.permission || f.accessLevel || f.access || f.accessRights || '';
+        const permStr = rawPerm.toString().toUpperCase();
+        const canWrite = !permStr || WRITE_LEVELS.has(permStr);
+
+        if (canWrite) {
+          result.push({
+            id: f.id,
+            name: f.name || '(naamloos)',
+            path: currentPath.join(' / '),
+            depth: currentPath.length,
+          });
+        }
+        queue.push({ id: f.id, path: currentPath });
+      }
     }
   }
 
-  await walk(rootId, [], 0);
-
-  // Sorteer alfabetisch op path
   result.sort((a, b) => a.path.localeCompare(b.path, 'nl'));
+  console.log('[upload] writable folders:', result.length);
   return result;
 }
 

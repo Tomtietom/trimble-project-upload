@@ -549,9 +549,11 @@ async function uploadAll() {
 //  UI rendering
 // ============================================================
 function renderApp() {
+  console.log('[upload] renderApp() called — writable folders:', writableFolders.length, '| DOM app element:', !!document.getElementById('app'));
   document.getElementById('loading').style.display = 'none';
   const app = document.getElementById('app');
   app.style.display = '';
+  document.title = '✅ Projectinformatie toevoegen (v4)';
 
   const writableWarn = writableFolders.length === 0
     ? '<div class="warn">Je hebt nergens in dit project schrijfrechten. Neem contact op met de projectbeheerder.</div>'

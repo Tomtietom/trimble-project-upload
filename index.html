@@ -476,7 +476,8 @@ function suggestFolder(item) {
 }
 
 // ============================================================
-//  Upload — TC 2-staps (POST file record → PUT binary)
+//  Upload — TC multipart/form-data
+//  (JSON+signed-URL pattern gaf "Invalid Json" 400 terug)
 // ============================================================
 async function uploadFile(item) {
   item.status = 'uploading';
@@ -486,50 +487,43 @@ async function uploadFile(item) {
   const folder = writableFolders.find(f => f.id === item.folderId);
   if (!folder) throw new Error('Geen map geselecteerd');
 
-  // Stap 1: file record aanmaken op TC (krijgt uploadUrl terug)
-  const body = {
-    name: item.file.name,
-    parentId: folder.id,
-    size: item.file.size,
-  };
-  if (item.description) body.description = item.description;
+  // TC /files accepteert multipart/form-data met de binary onder 'file' en metadata als form fields.
+  // LET OP: Content-Type header NIET zelf zetten — de browser genereert die incl. boundary.
+  const fd = new FormData();
+  fd.append('file', item.file, item.file.name);
+  fd.append('parentId', folder.id);
+  fd.append('name', item.file.name);
+  if (item.description) fd.append('description', item.description);
 
-  const createResp = await tcFetch('/files', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  const uploadUrl = createResp.uploadUrl || createResp.upload_url || createResp.url;
-  const fileId = createResp.id || createResp.fileId;
-  if (!uploadUrl) throw new Error('Geen uploadUrl ontvangen van TC (/files response: ' + JSON.stringify(createResp).slice(0, 200) + ')');
-
-  item.progress = 20;
-  renderQueue();
-
-  // Stap 2: binary via PUT naar de signed URL (geen Bearer header!)
-  await new Promise((resolve, reject) => {
+  // XHR ipv fetch zodat we upload progress krijgen
+  const result = await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', uploadUrl);
+    xhr.open('POST', TC_API_BASE + '/files');
+    xhr.setRequestHeader('Authorization', 'Bearer ' + tcToken);
+    xhr.setRequestHeader('Accept', 'application/json');
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        item.progress = 20 + Math.round((e.loaded / e.total) * 75);
+        item.progress = 5 + Math.round((e.loaded / e.total) * 90);
         renderQueue();
       }
     };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error('PUT upload mislukt: ' + xhr.status + ' ' + xhr.statusText));
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText || '{}')); }
+        catch (e) { resolve({}); }
+      } else {
+        reject(new Error('TC /files ' + xhr.status + ' — ' + (xhr.responseText || '').slice(0, 300)));
+      }
     };
     xhr.onerror = () => reject(new Error('Netwerkfout tijdens upload'));
-    xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
-    xhr.send(item.file);
+    xhr.send(fd);
   });
 
   item.progress = 100;
   item.status = 'done';
-  item.fileId = fileId;
+  item.fileId = result.id || result.fileId;
   renderQueue();
+  console.log('[upload] done:', item.file.name, '| response keys:', Object.keys(result));
 }
 
 async function uploadAll() {

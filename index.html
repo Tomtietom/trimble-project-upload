@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projectinformatie toevoegen — At Fielt</title>
+
+<!-- Trimble Connect Workspace API -->
+<script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+
+<!-- At Fielt Extension Hub — NIET VERWIJDEREN (zie atfielt-extension-hub/HUB-INTEGRATION.md) -->
+<script src="https://atfielt-extension-hub.tom-da0.workers.dev/client.js"></script>
+
+<style>
+  :root {
+    --af-oranje: #d4821a;
+    --af-oranje-hover: #ec5d0e;
+    --af-oranje-licht: #fef5eb;
+    --af-donker: #222;
+    --af-grijs: #f5f0ea;
+    --af-lijn: #e5e0d8;
+    --af-groen: #2d7a3e;
+    --af-rood: #b83a3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #f9f9f9;
+    color: var(--af-donker);
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+  }
+  .loading, .fatal {
+    padding: 40px;
+    text-align: center;
+  }
+  .fatal { color: var(--af-rood); }
+  .app { padding: 20px; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: #666; margin: 0 0 24px; font-size: 13px; }
+
+  /* Drop zone */
+  .dropzone {
+    border: 2px dashed var(--af-lijn);
+    border-radius: 10px;
+    padding: 40px 20px;
+    text-align: center;
+    background: white;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .dropzone:hover, .dropzone.drag {
+    border-color: var(--af-oranje);
+    background: var(--af-oranje-licht);
+  }
+  .dropzone p { margin: 8px 0; }
+  .dropzone .hint { color: #888; font-size: 12px; }
+  .dropzone input[type=file] { display: none; }
+  .dropzone .pick-btn {
+    background: var(--af-oranje);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+  .dropzone .pick-btn:hover { background: var(--af-oranje-hover); }
+
+  /* File queue */
+  .queue { margin-top: 20px; }
+  .queue-item {
+    background: white;
+    border: 1px solid var(--af-lijn);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .queue-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .queue-name {
+    font-weight: 600;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .queue-size { color: #888; font-size: 12px; white-space: nowrap; }
+  .queue-remove {
+    background: none;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 4px;
+  }
+  .queue-remove:hover { color: var(--af-rood); }
+  .queue-body { margin-top: 10px; }
+  .queue-body label {
+    display: block;
+    font-size: 12px;
+    color: #666;
+    margin: 8px 0 4px;
+  }
+  .queue-body input[type=text],
+  .queue-body textarea,
+  .queue-body select {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--af-lijn);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    background: white;
+  }
+  .queue-body textarea { resize: vertical; min-height: 54px; }
+  .suggestion {
+    font-size: 11px;
+    color: var(--af-oranje);
+    margin-top: 4px;
+  }
+  .progress {
+    height: 5px;
+    background: var(--af-grijs);
+    border-radius: 3px;
+    margin-top: 10px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: var(--af-oranje);
+    width: 0%;
+    transition: width 0.2s;
+  }
+  .status {
+    font-size: 12px;
+    margin-top: 6px;
+  }
+  .status.ok { color: var(--af-groen); }
+  .status.err { color: var(--af-rood); }
+
+  /* Actions */
+  .actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+  }
+  .btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .btn-primary {
+    background: var(--af-oranje);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--af-oranje-hover); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-ghost {
+    background: transparent;
+    color: #666;
+    border: 1px solid var(--af-lijn);
+  }
+
+  .empty-state {
+    text-align: center;
+    color: #888;
+    padding: 40px 20px;
+  }
+  .warn {
+    background: #fff8e8;
+    border: 1px solid #e8d89c;
+    color: #7a5c00;
+    padding: 12px 14px;
+    border-radius: 8px;
+    margin: 16px 0;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading" class="loading">Laden…</div>
+<div id="app" class="app" style="display:none"></div>
+
+<script>
+// ============================================================
+//  SLUG — moet overeenkomen met extensions.slug in de hub DB
+// ============================================================
+const EXTENSION_SLUG = 'project-upload';
+
+// ============================================================
+//  Trimble API region → base URL
+// ============================================================
+const TC_API_REGIONS = {
+  europe: 'https://app21.connect.trimble.com/tc/api/2.0',
+  'north america': 'https://app.connect.trimble.com/tc/api/2.0',
+  asia: 'https://app31.connect.trimble.com/tc/api/2.0',
+};
+let TC_API_BASE = TC_API_REGIONS.europe;
+
+// Permission-levels die schrijven toestaan.
+// TC geeft typisch READ / WRITE / FULL / ADMIN / NONE per folder voor current user.
+const WRITE_LEVELS = new Set(['WRITE', 'FULL', 'ADMIN', 'OWNER']);
+
+let tcAPI = null;
+let tcToken = null;
+let tcProject = null;
+let writableFolders = []; // [{id, name, path, depth}]
+let queue = []; // [{id, file, description, folderId, suggestedFolderId, progress, status, error}]
+let nextQueueId = 1;
+
+// ============================================================
+//  Init
+// ============================================================
+async function init() {
+  const apiLib = await waitForWorkspaceAPI(10000);
+  tcAPI = await apiLib.connect(window.parent, function (event, data) {
+    if (data && (data.type === 'token' || event === 'extension.accessToken')) {
+      const t = (typeof data === 'string') ? data : (data.token || data.accessToken || null);
+      if (t && t.length > 20) tcToken = t;
+    }
+  }, 15000);
+
+  tcProject = await tcAPI.project.getCurrentProject();
+
+  const loc = (tcProject.location || 'europe').toLowerCase();
+  if (loc.includes('america') || loc.includes('north')) TC_API_BASE = TC_API_REGIONS['north america'];
+  else if (loc.includes('asia')) TC_API_BASE = TC_API_REGIONS.asia;
+  else TC_API_BASE = TC_API_REGIONS.europe;
+
+  if (!tcToken) {
+    try {
+      const r = await Promise.race([
+        tcAPI.extension.requestPermission('accesstoken'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+      ]);
+      if (typeof r === 'string' && r.length > 20) tcToken = r;
+      else if (r && r.token) tcToken = r.token;
+    } catch (e) { console.warn('[TC] requestPermission faalde:', e.message); }
+  }
+  if (!tcToken && tcAPI.extension?.getAccessToken) {
+    try { const t = await tcAPI.extension.getAccessToken(); if (t && t.length > 20) tcToken = t; } catch (e) {}
+  }
+  if (!tcToken) throw new Error('Geen access token ontvangen van Trimble');
+
+  // ╔══════════════════════════════════════════════════════════╗
+  // ║  AT FIELT EXTENSION HUB — NIET VERWIJDEREN               ║
+  // ╚══════════════════════════════════════════════════════════╝
+  if (!window.atfieltHub) {
+    document.body.innerHTML = '<div class="fatal">At Fielt Hub kon niet geladen worden. Controleer je internetverbinding en herlaad.<br><br><a href="mailto:info@atfielt.nl">info@atfielt.nl</a></div>';
+    throw new Error('Hub client niet geladen');
+  }
+  await window.atfieltHub.check({
+    slug: EXTENSION_SLUG,
+    tcToken: tcToken,
+    tcProject: tcProject,
+    apiBase: TC_API_BASE,
+  });
+  // ╔══════════════════════════════════════════════════════════╗
+  // ║  EINDE AT FIELT HUB BLOK                                 ║
+  // ╚══════════════════════════════════════════════════════════╝
+
+  // Folder-tree ophalen en filteren op schrijfrechten
+  document.getElementById('loading').textContent = 'Mappen ophalen en rechten controleren…';
+  writableFolders = await fetchWritableFolders();
+
+  if (window.atfieltHub) {
+    window.atfieltHub.logEvent('feature', {
+      action: 'folders-loaded',
+      writableCount: writableFolders.length,
+    });
+  }
+
+  renderApp();
+}
+
+// ============================================================
+//  TC fetch helper
+// ============================================================
+async function tcFetch(path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({
+    Authorization: 'Bearer ' + tcToken,
+    Accept: 'application/json',
+  }, opts.headers || {});
+  const r = await fetch(TC_API_BASE + path, {
+    method: opts.method || 'GET',
+    headers: headers,
+    body: opts.body,
+  });
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw new Error('TC API ' + r.status + ' ' + path + ' — ' + txt.slice(0, 200));
+  }
+  if (opts.raw) return r;
+  return r.json();
+}
+
+// ============================================================
+//  Folder tree + schrijfrechten filter
+// ============================================================
+async function fetchWritableFolders() {
+  // 1. Root folder ID ophalen via project
+  const proj = await tcFetch('/projects/' + tcProject.id);
+  const rootId = proj.rootFolderId || proj.rootFolder?.id || proj.root?.id;
+  if (!rootId) throw new Error('Kon root folder niet vinden op project');
+
+  // 2. Recursief de folder tree aflopen
+  const result = [];
+  const visited = new Set();
+
+  async function walk(folderId, pathParts, depth) {
+    if (visited.has(folderId)) return;
+    visited.add(folderId);
+    if (depth > 20) return; // veiligheid
+
+    // Folder details + items ophalen
+    let folder;
+    try {
+      folder = await tcFetch('/folders/' + folderId);
+    } catch (e) {
+      console.warn('[walk] folder fetch failed', folderId, e.message);
+      return;
+    }
+
+    const permission = (folder.permission || folder.access || folder.accessLevel || '').toString().toUpperCase();
+    const canWrite = WRITE_LEVELS.has(permission);
+
+    const folderName = folder.name || folder.title || '(naamloos)';
+    const currentPath = depth === 0 ? [] : pathParts.concat(folderName);
+
+    // Alleen niet-root folders toevoegen waar we mogen schrijven
+    if (canWrite && depth > 0) {
+      result.push({
+        id: folderId,
+        name: folderName,
+        path: currentPath.join(' / '),
+        depth: depth,
+      });
+    }
+
+    // Subfolders ophalen en recursief walken
+    let items = [];
+    try {
+      const resp = await tcFetch('/folders/' + folderId + '/items?items=subFolders');
+      items = resp.items || resp.subFolders || resp || [];
+    } catch (e) {
+      // Fallback: sommige TC versies gebruiken een andere endpoint
+      try {
+        const resp2 = await tcFetch('/folders/' + folderId + '/folders');
+        items = resp2.items || resp2 || [];
+      } catch (e2) {
+        console.warn('[walk] items fetch failed', folderId, e2.message);
+      }
+    }
+
+    for (const it of items) {
+      if (!it || !it.id) continue;
+      // Filter op type FOLDER als type-veld aanwezig is
+      if (it.type && it.type !== 'FOLDER' && it.type !== 'folder') continue;
+      await walk(it.id, currentPath, depth + 1);
+    }
+  }
+
+  await walk(rootId, [], 0);
+
+  // Sorteer alfabetisch op path
+  result.sort((a, b) => a.path.localeCompare(b.path, 'nl'));
+  return result;
+}
+
+// ============================================================
+//  Plaatsingsvoorstel — fuzzy match op metadata + filename
+// ============================================================
+const NL_STOPWORDS = new Set(['de','het','een','van','voor','en','of','in','op','te','aan','bij','met','tot','uit','naar','door']);
+
+function tokenize(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9àáâäèéêëìíîïòóôöùúûü\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !NL_STOPWORDS.has(w));
+}
+
+function suggestFolder(item) {
+  if (!writableFolders.length) return null;
+  const filenameTokens = tokenize(item.file.name.replace(/\.[^.]+$/, ''));
+  const descTokens = tokenize(item.description);
+  const allTokens = [...new Set([...filenameTokens, ...descTokens])];
+
+  if (!allTokens.length) return writableFolders[0]?.id || null;
+
+  let best = null;
+  let bestScore = -1;
+
+  for (const folder of writableFolders) {
+    const nameLower = folder.name.toLowerCase();
+    const pathLower = folder.path.toLowerCase();
+    let score = 0;
+
+    // Exacte substring match op folder-naam
+    for (const tok of allTokens) {
+      if (nameLower.includes(tok)) score += 10;
+      else if (pathLower.includes(tok)) score += 5;
+    }
+    // Gedeelde tokens met folder-naam
+    const folderTokens = tokenize(folder.name);
+    for (const tok of allTokens) {
+      if (folderTokens.includes(tok)) score += 3;
+    }
+    // Ondieper = lichte voorkeur bij ties
+    score -= folder.depth * 0.1;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = folder;
+    }
+  }
+
+  return bestScore > 0 ? best.id : (writableFolders[0]?.id || null);
+}
+
+// ============================================================
+//  Upload — TC 2-staps (POST file record → PUT binary)
+// ============================================================
+async function uploadFile(item) {
+  item.status = 'uploading';
+  item.progress = 5;
+  renderQueue();
+
+  const folder = writableFolders.find(f => f.id === item.folderId);
+  if (!folder) throw new Error('Geen map geselecteerd');
+
+  // Stap 1: file record aanmaken op TC (krijgt uploadUrl terug)
+  const body = {
+    name: item.file.name,
+    parentId: folder.id,
+    size: item.file.size,
+  };
+  if (item.description) body.description = item.description;
+
+  const createResp = await tcFetch('/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const uploadUrl = createResp.uploadUrl || createResp.upload_url || createResp.url;
+  const fileId = createResp.id || createResp.fileId;
+  if (!uploadUrl) throw new Error('Geen uploadUrl ontvangen van TC (/files response: ' + JSON.stringify(createResp).slice(0, 200) + ')');
+
+  item.progress = 20;
+  renderQueue();
+
+  // Stap 2: binary via PUT naar de signed URL (geen Bearer header!)
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        item.progress = 20 + Math.round((e.loaded / e.total) * 75);
+        renderQueue();
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error('PUT upload mislukt: ' + xhr.status + ' ' + xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error('Netwerkfout tijdens upload'));
+    xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
+    xhr.send(item.file);
+  });
+
+  item.progress = 100;
+  item.status = 'done';
+  item.fileId = fileId;
+  renderQueue();
+}
+
+async function uploadAll() {
+  const pending = queue.filter(i => i.status === 'pending' && i.folderId);
+  if (!pending.length) return;
+
+  document.getElementById('upload-btn').disabled = true;
+  let ok = 0, fail = 0, totalBytes = 0;
+
+  for (const item of pending) {
+    try {
+      await uploadFile(item);
+      ok++;
+      totalBytes += item.file.size;
+    } catch (e) {
+      console.error('[upload] failed', item.file.name, e);
+      item.status = 'error';
+      item.error = e.message;
+      fail++;
+      renderQueue();
+    }
+  }
+
+  document.getElementById('upload-btn').disabled = false;
+
+  if (window.atfieltHub) {
+    window.atfieltHub.logEvent('feature', {
+      action: 'upload-batch',
+      success: ok,
+      failed: fail,
+      bytes: totalBytes,
+    });
+  }
+}
+
+// ============================================================
+//  UI rendering
+// ============================================================
+function renderApp() {
+  document.getElementById('loading').style.display = 'none';
+  const app = document.getElementById('app');
+  app.style.display = '';
+
+  const writableWarn = writableFolders.length === 0
+    ? '<div class="warn">Je hebt nergens in dit project schrijfrechten. Neem contact op met de projectbeheerder.</div>'
+    : '';
+
+  app.innerHTML = `
+    <h1>Documenten toevoegen aan "${escapeHtml(tcProject.name)}"</h1>
+    <p class="subtitle">${writableFolders.length} map${writableFolders.length === 1 ? '' : 'pen'} beschikbaar voor upload</p>
+    ${writableWarn}
+    <div class="dropzone" id="dropzone">
+      <p><strong>Sleep bestanden hierheen</strong></p>
+      <p class="hint">of</p>
+      <button class="pick-btn" type="button" id="pick-btn">Kies bestanden</button>
+      <input type="file" id="file-input" multiple>
+    </div>
+    <div class="queue" id="queue"></div>
+    <div class="actions" id="actions" style="display:none">
+      <button class="btn btn-ghost" id="clear-btn">Wissen</button>
+      <button class="btn btn-primary" id="upload-btn">Uploaden</button>
+    </div>
+  `;
+
+  const dz = document.getElementById('dropzone');
+  const input = document.getElementById('file-input');
+  document.getElementById('pick-btn').addEventListener('click', () => input.click());
+  dz.addEventListener('click', (e) => {
+    if (e.target.tagName !== 'BUTTON') input.click();
+  });
+  input.addEventListener('change', (e) => addFiles(e.target.files));
+
+  dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dz.classList.remove('drag');
+    addFiles(e.dataTransfer.files);
+  });
+
+  document.getElementById('clear-btn').addEventListener('click', () => {
+    queue = queue.filter(i => i.status === 'uploading');
+    renderQueue();
+  });
+  document.getElementById('upload-btn').addEventListener('click', uploadAll);
+}
+
+function addFiles(fileList) {
+  if (!writableFolders.length) return;
+  for (const f of fileList) {
+    const item = {
+      id: nextQueueId++,
+      file: f,
+      description: '',
+      folderId: null,
+      suggestedFolderId: null,
+      progress: 0,
+      status: 'pending',
+      error: null,
+    };
+    item.suggestedFolderId = suggestFolder(item);
+    item.folderId = item.suggestedFolderId;
+    queue.push(item);
+  }
+  renderQueue();
+}
+
+function renderQueue() {
+  const qEl = document.getElementById('queue');
+  const actions = document.getElementById('actions');
+  if (!qEl) return;
+
+  if (!queue.length) {
+    qEl.innerHTML = '';
+    actions.style.display = 'none';
+    return;
+  }
+  actions.style.display = '';
+
+  qEl.innerHTML = queue.map(item => {
+    const folderOpts = writableFolders.map(f =>
+      `<option value="${f.id}" ${f.id === item.folderId ? 'selected' : ''}>${escapeHtml(f.path || f.name)}</option>`
+    ).join('');
+
+    const suggested = writableFolders.find(f => f.id === item.suggestedFolderId);
+    const suggestLine = (suggested && item.status === 'pending')
+      ? `<div class="suggestion">Voorstel: ${escapeHtml(suggested.path || suggested.name)}</div>`
+      : '';
+
+    const statusLine = item.status === 'done'
+      ? '<div class="status ok">✓ Geüpload</div>'
+      : item.status === 'error'
+      ? `<div class="status err">✗ ${escapeHtml(item.error || 'Fout')}</div>`
+      : '';
+
+    const progressBar = item.status === 'uploading' || item.status === 'done'
+      ? `<div class="progress"><div class="progress-bar" style="width:${item.progress}%"></div></div>`
+      : '';
+
+    const disabled = item.status !== 'pending' ? 'disabled' : '';
+
+    return `
+      <div class="queue-item" data-id="${item.id}">
+        <div class="queue-head">
+          <div class="queue-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</div>
+          <div class="queue-size">${formatBytes(item.file.size)}</div>
+          ${item.status === 'pending' ? `<button class="queue-remove" data-remove="${item.id}" title="Verwijderen">×</button>` : ''}
+        </div>
+        <div class="queue-body">
+          <label>Beschrijving</label>
+          <textarea data-field="description" data-id="${item.id}" ${disabled} placeholder="Optioneel…">${escapeHtml(item.description)}</textarea>
+          <label>Map</label>
+          <select data-field="folderId" data-id="${item.id}" ${disabled}>${folderOpts}</select>
+          ${suggestLine}
+          ${progressBar}
+          ${statusLine}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Event handlers
+  qEl.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.getAttribute('data-remove'));
+      queue = queue.filter(i => i.id !== id);
+      renderQueue();
+    });
+  });
+  qEl.querySelectorAll('textarea[data-field=description]').forEach(el => {
+    el.addEventListener('input', () => {
+      const id = Number(el.getAttribute('data-id'));
+      const item = queue.find(i => i.id === id);
+      if (!item) return;
+      item.description = el.value;
+      // Herbereken suggestie maar overschrijf user-keuze niet zodra die iets anders koos
+      const newSug = suggestFolder(item);
+      if (item.folderId === item.suggestedFolderId) {
+        item.folderId = newSug;
+      }
+      item.suggestedFolderId = newSug;
+      // Alleen folder-select en suggestion-lijn hertekenen zou sneller zijn,
+      // maar voor eenvoud: hele queue. Focus herstellen gebeurt automatisch niet,
+      // dus we houden focus op de textarea:
+      const activeId = document.activeElement?.getAttribute('data-id');
+      renderQueue();
+      if (activeId) {
+        const ta = document.querySelector(`textarea[data-id="${activeId}"]`);
+        if (ta) {
+          ta.focus();
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+        }
+      }
+    });
+  });
+  qEl.querySelectorAll('select[data-field=folderId]').forEach(el => {
+    el.addEventListener('change', () => {
+      const id = Number(el.getAttribute('data-id'));
+      const item = queue.find(i => i.id === id);
+      if (item) item.folderId = el.value;
+    });
+  });
+}
+
+// ============================================================
+//  Helpers
+// ============================================================
+function waitForWorkspaceAPI(maxWait) {
+  return new Promise(function (resolve, reject) {
+    let api = window.WorkspaceAPI || window.Extensions || window.TrimbleConnectWorkspace;
+    if (api) return resolve(api);
+    const start = Date.now();
+    const interval = setInterval(function () {
+      api = window.WorkspaceAPI || window.Extensions || window.TrimbleConnectWorkspace;
+      if (api) { clearInterval(interval); resolve(api); }
+      else if (Date.now() - start > maxWait) { clearInterval(interval); reject(new Error('Workspace API timeout')); }
+    }, 200);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+// ============================================================
+//  Start
+// ============================================================
+document.addEventListener('DOMContentLoaded', function () {
+  init().catch(function (e) {
+    console.error('[Init] Fout:', e);
+    document.getElementById('loading').innerHTML = '<div class="fatal">Fout bij laden: ' + escapeHtml(e.message) + '</div>';
+  });
+});
+</script>
+</body>
+</html>

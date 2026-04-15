@@ -212,9 +212,9 @@ const TC_API_REGIONS = {
 };
 let TC_API_BASE = TC_API_REGIONS.europe;
 
-// Permission-levels die schrijven toestaan.
-// TC geeft typisch READ / WRITE / FULL / ADMIN / NONE per folder voor current user.
-const WRITE_LEVELS = new Set(['WRITE', 'FULL', 'ADMIN', 'OWNER']);
+// Permissions die expliciet read-only zijn — alle andere/lege waardes zien we als potentieel schrijfbaar.
+// Als TC later 403 teruggeeft bij upload handelt uploadFile() dat af.
+const DENY_LEVELS = new Set(['READ', 'READONLY', 'NONE', 'VIEW', 'VIEWER', 'DENY']);
 
 let tcAPI = null;
 let tcToken = null;
@@ -338,10 +338,17 @@ async function fetchWritableFolders() {
   if (!rootId) throw new Error('Root folder niet gevonden op project');
   console.log('[upload] root folder:', rootId);
 
-  // 2. Breadth-first tree walk (parallel, zoals rechten-viewer)
-  const result = [];
+  // Root folder als eerste optie (uploaden naar projectroot)
+  const result = [{
+    id: rootId,
+    name: tcProject.name || 'Projectroot',
+    path: '(projectroot)',
+    depth: 0,
+  }];
+
   let queue = [{ id: rootId, path: [] }];
-  let loggedItemKeys = false;
+  let loggedSample = false;
+  let totalItemsSeen = 0;
 
   while (queue.length) {
     const batch = queue.splice(0, 20);
@@ -356,19 +363,22 @@ async function fetchWritableFolders() {
     }));
 
     for (const { path, items } of batchResults) {
+      totalItemsSeen += items.length;
       const folders = items.filter(it => (it.type || '').toUpperCase() === 'FOLDER');
-      if (!loggedItemKeys && folders.length) {
-        // Log de eerste folder zodat we zien welk permission-veld beschikbaar is
-        console.log('[upload] sample folder keys:', Object.keys(folders[0]), folders[0]);
-        loggedItemKeys = true;
+
+      if (!loggedSample && items.length) {
+        // Dump het RAUWE sample als JSON string zodat alle velden zichtbaar zijn in de log
+        console.log('[upload] sample item JSON:', JSON.stringify(items[0], null, 2));
+        loggedSample = true;
       }
+
       for (const f of folders) {
         const currentPath = path.concat(f.name || '(naamloos)');
-        // Probeer permission-velden; als TC er niks geeft tonen we de map wel
-        // (we weten dan niet zeker of write werkt; de upload-call geeft anders 403)
-        const rawPerm = f.permission || f.accessLevel || f.access || f.accessRights || '';
-        const permStr = rawPerm.toString().toUpperCase();
-        const canWrite = !permStr || WRITE_LEVELS.has(permStr);
+        const rawPerm = f.permission || f.accessLevel || f.access || f.accessRights || f.role || '';
+        const permStr = (typeof rawPerm === 'object' ? (rawPerm.type || rawPerm.level || '') : rawPerm).toString().toUpperCase();
+        const canWrite = !DENY_LEVELS.has(permStr);
+
+        console.log('[upload] folder:', currentPath.join('/'), '| permStr:', JSON.stringify(permStr), '| canWrite:', canWrite);
 
         if (canWrite) {
           result.push({
@@ -383,8 +393,8 @@ async function fetchWritableFolders() {
     }
   }
 
+  console.log('[upload] total items seen:', totalItemsSeen, '| writable folders:', result.length);
   result.sort((a, b) => a.path.localeCompare(b.path, 'nl'));
-  console.log('[upload] writable folders:', result.length);
   return result;
 }
 

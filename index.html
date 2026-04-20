@@ -546,16 +546,18 @@ async function uploadFile(item) {
   const folder = writableFolders.find(f => f.id === item.folderId);
   if (!folder) throw new Error('Geen map geselecteerd');
 
-  // TC /files accepteert multipart/form-data met de binary onder 'file' en metadata als form fields.
-  // LET OP: Content-Type header NIET zelf zetten — de browser genereert die incl. boundary.
-  const fd = new FormData();
-  fd.append('file', item.file, item.file.name);
-  fd.append('parentId', folder.id);
-  fd.append('name', item.file.name);
-  if (item.description) fd.append('description', item.description);
+  // Bouwer voor FormData — opnieuw aanroepen bij 401-retry, want FormData kan niet hergebruikt worden na verzending
+  const buildFd = () => {
+    const fd = new FormData();
+    fd.append('file', item.file, item.file.name);
+    fd.append('parentId', folder.id);
+    fd.append('name', item.file.name);
+    if (item.description) fd.append('description', item.description);
+    return fd;
+  };
 
-  // XHR ipv fetch zodat we upload progress krijgen
-  const result = await new Promise((resolve, reject) => {
+  // Één upload-poging via XHR (voor progress events)
+  const doXhrUpload = () => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', TC_API_BASE + '/files');
     xhr.setRequestHeader('Authorization', 'Bearer ' + tcToken);
@@ -568,15 +570,32 @@ async function uploadFile(item) {
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        try { resolve(JSON.parse(xhr.responseText || '{}')); }
-        catch (e) { resolve({}); }
+        try { resolve({ ok: true, data: JSON.parse(xhr.responseText || '{}') }); }
+        catch (e) { resolve({ ok: true, data: {} }); }
+      } else if (xhr.status === 401) {
+        // Signaleer 401 apart zodat we kunnen retry'en met vers token
+        resolve({ ok: false, status: 401, body: xhr.responseText || '' });
       } else {
         reject(new Error('TC /files ' + xhr.status + ' — ' + (xhr.responseText || '').slice(0, 300)));
       }
     };
     xhr.onerror = () => reject(new Error('Netwerkfout tijdens upload'));
-    xhr.send(fd);
+    xhr.send(buildFd());
   });
+
+  // Eerst zorgen dat token vers is vóór we beginnen (belangrijk bij lange queues)
+  await _ensureValidToken();
+  let attempt = await doXhrUpload();
+  if (!attempt.ok && attempt.status === 401) {
+    console.log('[upload] 401 bij ' + item.file.name + ', token refreshen en opnieuw proberen...');
+    item.progress = 5; renderQueue();
+    await _ensureValidToken();
+    attempt = await doXhrUpload();
+    if (!attempt.ok) {
+      throw new Error('TC /files 401 na token-refresh — ' + (attempt.body || '').slice(0, 300));
+    }
+  }
+  const result = attempt.data;
 
   item.progress = 100;
   item.status = 'done';

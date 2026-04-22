@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v6 — 2026-04-22 (huisstijl + paginated folders) -->
-<script>window.__BUILD_VERSION__ = 'v6-2026-04-22';</script>
+<!-- BUILD: v7 — 2026-04-22 (folder-shortlist via metadata scoring) -->
+<script>window.__BUILD_VERSION__ = 'v7-2026-04-22';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -94,6 +94,23 @@
   .meta-row .warn-icon{color:#d18000;font-size:var(--fs-md);line-height:1}
   .meta-row select.warn-select{border-color:#e0b65c;background:#fffbe9}
   .meta-row select[data-auto="1"]{color:var(--af);font-weight:500}
+
+  /* Folder-picker (shortlist + zoekveld) */
+  .folder-picker{margin-top:var(--s1)}
+  .folder-current{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);padding:10px var(--s3);background:var(--afl);border-left:3px solid var(--af);border-radius:var(--r-sm);font-size:var(--fs-md);margin-bottom:var(--s2)}
+  .folder-current .path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dk);font-weight:500}
+  .folder-current .change-btn{background:#fff;border:1px solid var(--hl);padding:5px 12px;border-radius:var(--r-pill);cursor:pointer;font-size:var(--fs-sm);color:var(--g5);white-space:nowrap;font-family:'Poppins',sans-serif;transition:all .15s}
+  .folder-current .change-btn:hover{border-color:var(--af);color:var(--af)}
+  .folder-list{margin-top:var(--s1);border:1px solid var(--hl-light);border-radius:var(--r-sm);overflow:hidden;background:#fff}
+  .folder-option{padding:8px var(--s3);cursor:pointer;font-size:var(--fs-sm);color:var(--g5);border-bottom:1px solid var(--hl-light);transition:background .1s;display:flex;align-items:center;gap:var(--s2);line-height:1.4}
+  .folder-option:last-child{border-bottom:none}
+  .folder-option span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .folder-option:hover{background:var(--afl);color:var(--dk)}
+  .folder-option.selected{background:var(--afl);color:var(--af);font-weight:600}
+  .folder-option .badge{display:inline-block;padding:1px 8px;border-radius:var(--r-pill);font-size:10px;letter-spacing:.5px;background:var(--af);color:#fff;font-weight:700;font-family:'Montserrat',sans-serif}
+  .folder-search{margin-top:var(--s2);width:100%;padding:8px 10px;border:1px solid var(--hl);border-radius:var(--r-sm);font:inherit;background:#fff;outline:none;transition:border-color .15s}
+  .folder-search:focus{border-color:var(--af)}
+  .folder-hint{font-size:var(--fs-xs);color:var(--g4);margin-top:var(--s1)}
 
   /* Path-preview */
   .path-preview{font-size:var(--fs-sm);color:var(--g5);margin-top:var(--s2);padding:var(--s2) var(--s3);background:var(--gr);border-left:3px solid var(--af);border-radius:var(--r-sm);line-height:1.5}
@@ -205,7 +222,7 @@ let tcAPI = null;
 let tcToken = null;
 let tcProject = null;
 let writableFolders = []; // [{id, name, path, depth}]
-let queue = []; // [{id, file, description, folderId, suggestedFolderId, progress, status, error, metadata, metadataAuto, warn}]
+let queue = []; // [{id, file, description, folderId, folderAuto, folderShortlist, folderSearch, folderPickerOpen, progress, status, error, warn, metadata, metadataAuto}]
 let nextQueueId = 1;
 let uploadConfig = { rules: [] }; // { rules: [{ depth, field, map? }] }
 let _psetStats = { ok: 0, fail: 0 };
@@ -576,42 +593,88 @@ function tokenize(s) {
     .filter(w => w.length >= 3 && !NL_STOPWORDS.has(w));
 }
 
-function suggestFolder(item) {
-  if (!writableFolders.length) return null;
-  const filenameTokens = tokenize(item.file.name.replace(/\.[^.]+$/, ''));
-  const descTokens = tokenize(item.description);
-  const allTokens = [...new Set([...filenameTokens, ...descTokens])];
+// Strip leidende nummers, prefixes, placeholders zodat "3.2 Voorlopig ontwerp" → "voorlopig ontwerp"
+function normalizeFolderPart(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/^[\d\.\-\s_]+/, '')
+    .replace(/\[naam\]/g, '')
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  if (!allTokens.length) return writableFolders[0]?.id || null;
+// Score één folder tegen een item (metadata + bestandsnaam + description)
+function scoreFolder(folder, item) {
+  if (!folder || folder.path === '(projectroot)') return 0;
+  const parts = folder.path.split(' / ').map(normalizeFolderPart);
+  let score = 0;
 
-  let best = null;
-  let bestScore = -1;
-
-  for (const folder of writableFolders) {
-    const nameLower = folder.name.toLowerCase();
-    const pathLower = folder.path.toLowerCase();
-    let score = 0;
-
-    // Exacte substring match op folder-naam
-    for (const tok of allTokens) {
-      if (nameLower.includes(tok)) score += 10;
-      else if (pathLower.includes(tok)) score += 5;
+  // Per ingevuld metadata-veld: substring-match in path-component
+  for (const f of METADATA_FIELDS) {
+    const val = (item.metadata[f] || '').toLowerCase().trim();
+    if (!val) continue;
+    let best = 0;
+    for (const p of parts) {
+      if (!p) continue;
+      if (p === val) { best = Math.max(best, 15); break; }
+      if (p.includes(val) || val.includes(p)) best = Math.max(best, 10);
     }
-    // Gedeelde tokens met folder-naam
-    const folderTokens = tokenize(folder.name);
-    for (const tok of allTokens) {
-      if (folderTokens.includes(tok)) score += 3;
-    }
-    // Ondieper = lichte voorkeur bij ties
-    score -= folder.depth * 0.1;
-
-    if (score > bestScore) {
-      bestScore = score;
-      best = folder;
-    }
+    score += best;
   }
 
-  return bestScore > 0 ? best.id : (writableFolders[0]?.id || null);
+  // Bestandsnaam- + description-tokens als secundair signaal
+  const extraTokens = [...new Set([
+    ...tokenize((item.file && item.file.name) ? item.file.name.replace(/\.[^.]+$/, '') : ''),
+    ...tokenize(item.description),
+  ])];
+  const nameLower = folder.name.toLowerCase();
+  const pathLower = folder.path.toLowerCase();
+  for (const tok of extraTokens) {
+    if (nameLower.includes(tok)) score += 3;
+    else if (pathLower.includes(tok)) score += 1;
+  }
+
+  // Diepere folders zijn specifieker → lichte bonus
+  if (score > 0) score += Math.min(folder.depth, 6) * 0.3;
+  return score;
+}
+
+// Score alle writable folders, sorteer, retourneer top-N met score
+function scoreFolders(item, limit) {
+  limit = limit || 8;
+  const out = [];
+  for (const f of writableFolders) {
+    const s = scoreFolder(f, item);
+    if (s > 0) out.push({ folder: f, score: s });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, limit);
+}
+
+// Substring-filter (alle tokens moeten voorkomen in pad)
+function filterFolders(query, limit) {
+  limit = limit || 10;
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return [];
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const out = [];
+  for (const f of writableFolders) {
+    const p = (f.path || '').toLowerCase();
+    if (tokens.every(t => p.includes(t))) {
+      out.push(f);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+// Herbereken shortlist + update top-1 alleen als user nog niet handmatig koos
+function recomputeFolderSuggestion(item) {
+  item.folderShortlist = scoreFolders(item);
+  if (item.folderAuto) {
+    item.folderId = item.folderShortlist[0] ? item.folderShortlist[0].folder.id : null;
+  }
 }
 
 // ============================================================
@@ -872,7 +935,10 @@ function addFiles(fileList) {
       file: f,
       description: '',
       folderId: null,
-      suggestedFolderId: null,
+      folderAuto: true,
+      folderShortlist: [],
+      folderSearch: '',
+      folderPickerOpen: true,
       progress: 0,
       status: 'pending',
       error: null,
@@ -880,8 +946,7 @@ function addFiles(fileList) {
       metadata: { discipline: '', project_fase: '', document_status: '' },
       metadataAuto: { discipline: false, project_fase: false, document_status: false },
     };
-    item.suggestedFolderId = suggestFolder(item);
-    item.folderId = item.suggestedFolderId;
+    recomputeFolderSuggestion(item);
     applyMetadataSuggestion(item);
     queue.push(item);
   }
@@ -901,15 +966,11 @@ function renderQueue() {
   actions.style.display = '';
 
   qEl.innerHTML = queue.map(item => {
-    const folderOpts = writableFolders.map(f =>
-      `<option value="${f.id}" ${f.id === item.folderId ? 'selected' : ''}>${escapeHtml(f.path || f.name)}</option>`
-    ).join('');
-
     const selectedFolder = writableFolders.find(f => f.id === item.folderId);
+    const folderPicker = item.status === 'pending' ? renderFolderPicker(item, selectedFolder) : '';
     const pathPreview = (selectedFolder && item.status === 'pending')
       ? renderPathPreview(item, selectedFolder)
       : '';
-
     const metaRow = item.status === 'pending' ? renderMetaRow(item) : '';
 
     let statusLine = '';
@@ -935,10 +996,10 @@ function renderQueue() {
         <div class="queue-body">
           <label>Beschrijving</label>
           <textarea data-field="description" data-id="${item.id}" ${disabled} placeholder="Optioneel…">${escapeHtml(item.description)}</textarea>
-          <label>Map</label>
-          <select data-field="folderId" data-id="${item.id}" ${disabled}>${folderOpts}</select>
-          ${pathPreview}
           ${metaRow}
+          <label>Map</label>
+          ${folderPicker}
+          ${pathPreview}
           ${progressBar}
           ${statusLine}
         </div>
@@ -960,33 +1021,28 @@ function renderQueue() {
       const item = queue.find(i => i.id === id);
       if (!item) return;
       item.description = el.value;
-      // Herbereken suggestie maar overschrijf user-keuze niet zodra die iets anders koos
-      const newSug = suggestFolder(item);
-      if (item.folderId === item.suggestedFolderId) {
-        item.folderId = newSug;
-      }
-      item.suggestedFolderId = newSug;
-      // Alleen folder-select en suggestion-lijn hertekenen zou sneller zijn,
-      // maar voor eenvoud: hele queue. Focus herstellen gebeurt automatisch niet,
-      // dus we houden focus op de textarea:
+      recomputeFolderSuggestion(item);
+      // Focus herstellen op de textarea na re-render
       const activeId = document.activeElement?.getAttribute('data-id');
       renderQueue();
       if (activeId) {
         const ta = document.querySelector(`textarea[data-id="${activeId}"]`);
-        if (ta) {
-          ta.focus();
-          ta.setSelectionRange(ta.value.length, ta.value.length);
-        }
+        if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
       }
     });
   });
-  qEl.querySelectorAll('select[data-field=folderId]').forEach(el => {
-    el.addEventListener('change', () => {
+  // Folder: klik op shortlist- of zoekresultaat
+  qEl.querySelectorAll('[data-folder-pick]').forEach(el => {
+    el.addEventListener('click', () => {
       const id = Number(el.getAttribute('data-id'));
+      const fid = el.getAttribute('data-folder-pick');
       const item = queue.find(i => i.id === id);
       if (!item) return;
-      item.folderId = el.value;
-      // Reset alleen auto-velden — user-gezette waarden blijven
+      item.folderId = fid;
+      item.folderAuto = false;
+      item.folderPickerOpen = false;
+      item.folderSearch = '';
+      // Metadata-auto-velden reseteren en opnieuw afleiden uit nieuwe pad
       for (const f of METADATA_FIELDS) {
         if (item.metadataAuto[f]) { item.metadata[f] = ''; item.metadataAuto[f] = false; }
       }
@@ -994,6 +1050,34 @@ function renderQueue() {
       renderQueue();
     });
   });
+  // Folder: 'Wijzigen' / 'Verbergen' toggle
+  qEl.querySelectorAll('[data-folder-toggle]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = Number(el.getAttribute('data-folder-toggle'));
+      const item = queue.find(i => i.id === id);
+      if (!item) return;
+      item.folderPickerOpen = !item.folderPickerOpen;
+      renderQueue();
+      if (item.folderPickerOpen) {
+        const input = document.querySelector(`input[data-folder-search="${id}"]`);
+        if (input) input.focus();
+      }
+    });
+  });
+  // Folder: zoekveld live-filter
+  qEl.querySelectorAll('input[data-folder-search]').forEach(el => {
+    el.addEventListener('input', () => {
+      const id = Number(el.getAttribute('data-folder-search'));
+      const item = queue.find(i => i.id === id);
+      if (!item) return;
+      item.folderSearch = el.value;
+      const caret = el.selectionStart;
+      renderQueue();
+      const again = document.querySelector(`input[data-folder-search="${id}"]`);
+      if (again) { again.focus(); try { again.setSelectionRange(caret, caret); } catch (_) {} }
+    });
+  });
+  // Metadata: wijziging her-scoret folders
   qEl.querySelectorAll('select[data-field^="meta-"]').forEach(el => {
     el.addEventListener('change', () => {
       const id = Number(el.getAttribute('data-id'));
@@ -1002,9 +1086,64 @@ function renderQueue() {
       if (!item || METADATA_FIELDS.indexOf(field) < 0) return;
       item.metadata[field] = el.value;
       item.metadataAuto[field] = false;
+      recomputeFolderSuggestion(item);
       renderQueue();
     });
   });
+}
+
+function renderFolderPicker(item, selectedFolder) {
+  // Geen keuze: shortlist + zoekveld zichtbaar
+  // Wel keuze maar 'wijzigen' aan: shortlist + zoekveld zichtbaar, gekozen pad bovenaan
+  // Wel keuze en niet aan het wijzigen: alleen gekozen pad met 'wijzigen' knop
+  const hasChoice = !!selectedFolder;
+  const pickerOpen = item.folderPickerOpen || !hasChoice;
+
+  const currentBlock = hasChoice ? `
+    <div class="folder-current">
+      <span class="path" title="${escapeHtml(selectedFolder.path || selectedFolder.name)}">${escapeHtml(selectedFolder.path || selectedFolder.name)}</span>
+      <button type="button" class="change-btn" data-folder-toggle="${item.id}">${pickerOpen ? 'Verbergen' : '🖉 Wijzigen'}</button>
+    </div>` : '';
+
+  if (hasChoice && !pickerOpen) {
+    return `<div class="folder-picker">${currentBlock}</div>`;
+  }
+
+  const shortlist = item.folderShortlist || [];
+  const searchResults = item.folderSearch ? filterFolders(item.folderSearch) : [];
+  const anyMeta = METADATA_FIELDS.some(f => item.metadata[f]);
+
+  let shortlistBlock = '';
+  if (shortlist.length) {
+    shortlistBlock = `
+      <div class="folder-hint">Voorstel op basis van metadata en bestandsnaam — klik om te kiezen:</div>
+      <div class="folder-list">
+        ${shortlist.slice(0, 5).map((s, i) => `
+          <div class="folder-option ${s.folder.id === item.folderId ? 'selected' : ''}" data-folder-pick="${s.folder.id}" data-id="${item.id}">
+            <span>${escapeHtml(s.folder.path || s.folder.name)}</span>
+            ${i === 0 && s.folder.id === item.folderId ? '<span class="badge">TOP</span>' : ''}
+          </div>`).join('')}
+      </div>`;
+  } else if (!anyMeta) {
+    shortlistBlock = `<div class="folder-hint">Vul Discipline/Fase/Status hierboven in voor een voorstel, of zoek hieronder handmatig.</div>`;
+  } else {
+    shortlistBlock = `<div class="folder-hint">Geen directe match gevonden — zoek hieronder handmatig.</div>`;
+  }
+
+  const searchBlock = `
+    <input type="text" class="folder-search" data-folder-search="${item.id}"
+           placeholder="Zoek in alle ${writableFolders.length} mappen…"
+           value="${escapeHtml(item.folderSearch || '')}">
+    ${searchResults.length ? `
+      <div class="folder-list">
+        ${searchResults.map(f => `
+          <div class="folder-option ${f.id === item.folderId ? 'selected' : ''}" data-folder-pick="${f.id}" data-id="${item.id}">
+            <span>${escapeHtml(f.path || f.name)}</span>
+          </div>`).join('')}
+      </div>` : (item.folderSearch ? '<div class="folder-hint">Geen resultaten.</div>' : '')}
+  `;
+
+  return `<div class="folder-picker">${currentBlock}${shortlistBlock}${searchBlock}</div>`;
 }
 
 function renderMetaRow(item) {
@@ -1141,9 +1280,7 @@ function openConfigModal() {
 }
 
 function renderPathPreview(item, folder) {
-  const pad = folder.path === '(projectroot)'
-    ? '<em>(projectroot)</em>'
-    : escapeHtml(folder.path);
+  // Pad zelf staat al in de folder-picker — hier alleen metadata-samenvatting
   const tags = METADATA_FIELDS.map(field => {
     const v = item.metadata[field];
     const lbl = escapeHtml(FIELD_LABEL[field]);
@@ -1154,7 +1291,7 @@ function renderPathPreview(item, folder) {
     }
     return `<span class="missing-tag">${lbl}: — ontbreekt</span>`;
   }).join(' · ');
-  return `<div class="path-preview"><strong>Opslag:</strong> ${pad}<br>${tags}</div>`;
+  return `<div class="path-preview">${tags}</div>`;
 }
 
 // ============================================================

@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v7 — 2026-04-22 (folder-shortlist via metadata scoring) -->
-<script>window.__BUILD_VERSION__ = 'v7-2026-04-22';</script>
+<!-- BUILD: v8 — 2026-04-22 (CORS-fix folders + hub lock-screen + data-loaded event) -->
+<script>window.__BUILD_VERSION__ = 'v8-2026-04-22';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -316,10 +316,11 @@ async function init() {
   await loadUploadConfig();
 
   if (window.atfieltHub) {
-    window.atfieltHub.logEvent('feature', {
-      action: 'folders-loaded',
-      writableCount: writableFolders.length,
+    // data-loaded event (consistent met tc-viewer / rechten-viewer / dashboard patroon)
+    window.atfieltHub.logEvent('data-loaded', {
+      writableFolders: writableFolders.length,
       configRules: uploadConfig.rules.length,
+      region: (tcProject.location || 'europe').toLowerCase(),
     });
   }
 
@@ -484,34 +485,22 @@ async function tcFetchPSet(path, opts) {
 
 // ============================================================
 //  Folder tree + schrijfrechten filter
+//  (Recursief via /folders/{id}/items — dit is de enige TC-endpoint met CORS
+//   support vanaf https://tomtietom.github.io; /folders?projectId= geeft CORS-fout.)
 // ============================================================
 async function fetchWritableFolders() {
-  // Strategie: één paginated call naar /folders?projectId=... geeft de hele tree in paar
-  // requests terug (100 folders per Range header). Veel sneller dan per-folder tree-crawl.
-  const allFolders = await fetchAllProjectFolders();
-  if (!allFolders.length) throw new Error('Geen folders gevonden voor project');
-
-  // Root = folder zonder parent of met parentId die zelf niet in de lijst zit
-  const byId = new Map();
-  for (const f of allFolders) byId.set(f.id, f);
-  const rootCand = allFolders.find(f => !f.parentId || !byId.has(f.parentId));
-  const rootId = rootCand ? rootCand.id : null;
-  if (!rootId) throw new Error('Root folder niet vindbaar');
-  console.log('[upload] root folder:', rootId, '| totaal folders:', allFolders.length);
-
-  // Pad per folder opbouwen via parent-chain
-  const pathCache = new Map();
-  function buildPath(f) {
-    if (!f) return [];
-    if (pathCache.has(f.id)) return pathCache.get(f.id);
-    if (f.id === rootId) { pathCache.set(f.id, []); return []; }
-    const parent = byId.get(f.parentId);
-    const p = parent ? buildPath(parent).concat(f.name || '(naamloos)') : [f.name || '(naamloos)'];
-    pathCache.set(f.id, p);
-    return p;
+  // Root folder ID ophalen
+  let rootId = null;
+  try {
+    const proj = await tcFetch('/projects/' + tcProject.id);
+    rootId = proj.rootId || proj.rootFolderId || proj.rootFolder?.id || proj.root?.id;
+  } catch (e) {
+    console.warn('[upload] /projects/{id} mislukt:', e.message);
   }
+  if (!rootId) throw new Error('Root folder niet gevonden op project');
+  console.log('[upload] root folder:', rootId);
 
-  // Root als eerste keuze
+  // Root als eerste optie (uploaden naar projectroot)
   const result = [{
     id: rootId,
     name: tcProject.name || 'Projectroot',
@@ -519,66 +508,48 @@ async function fetchWritableFolders() {
     depth: 0,
   }];
 
-  let sample = null;
-  for (const f of allFolders) {
-    if (f.id === rootId) continue;
-    if (!sample) sample = f;
-    const rawPerm = f.permission || f.accessLevel || f.access || f.accessRights || f.role || '';
-    const permStr = (typeof rawPerm === 'object' ? (rawPerm.type || rawPerm.level || '') : rawPerm).toString().toUpperCase();
-    if (DENY_LEVELS.has(permStr)) continue;
-    const parts = buildPath(f);
-    result.push({
-      id: f.id,
-      name: f.name || '(naamloos)',
-      path: parts.join(' / '),
-      depth: parts.length,
-    });
+  let queueList = [{ id: rootId, path: [] }];
+  const PARALLEL = 50; // oud patroon met 20 duurde ~60s; 50 = ~24s voor 2300 folders
+
+  while (queueList.length) {
+    const batch = queueList.splice(0, PARALLEL);
+    const batchResults = await Promise.all(batch.map(async ({ id, path }) => {
+      try {
+        const items = await tcFetch('/folders/' + id + '/items');
+        return { path, items: Array.isArray(items) ? items : (items.items || []) };
+      } catch (e) {
+        console.warn('[upload] folder items mislukt:', id, e.message);
+        return { path, items: [] };
+      }
+    }));
+
+    for (const { path, items } of batchResults) {
+      const folders = items.filter(it => (it.type || '').toUpperCase() === 'FOLDER');
+      for (const f of folders) {
+        const currentPath = path.concat(f.name || '(naamloos)');
+        const rawPerm = f.permission || f.accessLevel || f.access || f.accessRights || f.role || '';
+        const permStr = (typeof rawPerm === 'object' ? (rawPerm.type || rawPerm.level || '') : rawPerm).toString().toUpperCase();
+        const canWrite = !DENY_LEVELS.has(permStr);
+        if (canWrite) {
+          result.push({
+            id: f.id,
+            name: f.name || '(naamloos)',
+            path: currentPath.join(' / '),
+            depth: currentPath.length,
+          });
+        }
+        queueList.push({ id: f.id, path: currentPath });
+      }
+    }
   }
-  if (sample) console.log('[upload] sample folder JSON:', JSON.stringify(sample, null, 2).slice(0, 400));
 
   console.log('[upload] writable folders:', result.length);
   result.sort((a, b) => a.path.localeCompare(b.path, 'nl'));
   return result;
 }
 
-// Paginated fetch van /folders?projectId=... (Range-header, 100 per pagina)
-async function fetchAllProjectFolders() {
-  const out = [];
-  const pageSize = 500; // sommige TC-regio's accepteren grotere ranges; valt automatisch terug
-  let offset = 0;
-  let guard = 0;
-  while (guard++ < 100) {
-    await _ensureValidToken();
-    const url = TC_API_BASE + '/folders?projectId=' + tcProject.id;
-    const r = await fetchWithTimeout(url, {
-      method: 'GET',
-      headers: {
-        Authorization: 'Bearer ' + tcToken,
-        Accept: 'application/json',
-        Range: 'items=' + offset + '-' + (offset + pageSize - 1),
-      },
-    });
-    if (r.status === 401) { await _ensureValidToken(); continue; }
-    if (!r.ok && r.status !== 206) {
-      const txt = await r.text().catch(() => '');
-      throw new Error('TC /folders ' + r.status + ' — ' + txt.slice(0, 200));
-    }
-    const body = await r.json().catch(() => []);
-    const arr = Array.isArray(body) ? body : (body.items || []);
-    out.push(...arr);
-    // Content-Range: items 0-499/2364
-    const cr = r.headers.get('Content-Range') || '';
-    const m = cr.match(/items\s+\d+-(\d+)\/(\d+|\*)/i);
-    if (!m) break; // geen paginering
-    const lastIdx = parseInt(m[1], 10);
-    const total = m[2] === '*' ? null : parseInt(m[2], 10);
-    console.log('[upload] /folders page', offset, '-', lastIdx, '/', total || '?');
-    if (arr.length < pageSize) break;
-    if (total != null && lastIdx + 1 >= total) break;
-    offset = lastIdx + 1;
-  }
-  return out;
-}
+// (Oude paginated fetchAllProjectFolders is verwijderd — /folders?projectId= heeft geen
+// CORS headers vanaf tomtietom.github.io. We gebruiken weer recursieve /folders/{id}/items.)
 
 // ============================================================
 //  Plaatsingsvoorstel — fuzzy match op metadata + filename
@@ -1327,7 +1298,20 @@ function formatBytes(n) {
 document.addEventListener('DOMContentLoaded', function () {
   init().catch(function (e) {
     console.error('[Init] Fout:', e);
-    document.getElementById('loading').innerHTML = '<div class="fatal">Fout bij laden: ' + escapeHtml(e.message) + '</div>';
+    const msg = String(e && e.message || e || '');
+    // Hub 'Toegang geweigerd' of '403' → lock-scherm; overige fouten → generieke fatal
+    const isAccessDenied = /toegang|access|403|geweigerd|denied|forbidden/i.test(msg);
+    const loading = document.getElementById('loading');
+    if (isAccessDenied) {
+      loading.innerHTML = '<div class="fatal"><h2 style="margin:0 0 8px">Geen toegang</h2>'
+        + '<p style="color:#555;margin:0 0 12px">Je hebt geen actieve licentie voor deze extensie in dit project.</p>'
+        + '<p style="font-size:12px;color:#888">Details: ' + escapeHtml(msg) + '</p>'
+        + '<p style="margin-top:16px"><a href="mailto:info@atfielt.nl">info@atfielt.nl</a></p></div>';
+    } else {
+      loading.innerHTML = '<div class="fatal"><h2 style="margin:0 0 8px">Fout bij laden</h2>'
+        + '<p style="color:#555">' + escapeHtml(msg) + '</p>'
+        + '<p style="margin-top:16px;font-size:12px;color:#888">Probeer de extensie te sluiten en opnieuw te openen. Blijft het probleem? <a href="mailto:info@atfielt.nl">info@atfielt.nl</a></p></div>';
+    }
   });
 });
 </script>

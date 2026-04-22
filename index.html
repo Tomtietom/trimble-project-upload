@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen — At Fielt</title>
-<!-- BUILD: v4 — 2026-04-15 -->
-<script>window.__BUILD_VERSION__ = 'v4-2026-04-15';</script>
+<!-- BUILD: v5 — 2026-04-22 (metadata bij upload) -->
+<script>window.__BUILD_VERSION__ = 'v5-2026-04-22';</script>
 
 <!-- Trimble Connect Workspace API -->
 <script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
@@ -152,6 +152,134 @@
   }
   .status.ok { color: var(--af-groen); }
   .status.err { color: var(--af-rood); }
+  .status.warn { color: #7a5c00; }
+  .status.info { color: #555; }
+
+  /* Metadata-rij */
+  .meta-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .meta-row > div { min-width: 0; }
+  .meta-row label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 0 2px;
+    font-size: 12px;
+    color: #666;
+  }
+  .meta-row .warn-icon {
+    color: #d18000;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .meta-row select.warn-select {
+    border-color: #e0b65c;
+    background: #fffbe9;
+  }
+  .meta-row select[data-auto="1"] {
+    color: var(--af-oranje);
+    font-weight: 500;
+  }
+  .path-preview {
+    font-size: 12px;
+    color: #555;
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: var(--af-grijs);
+    border-radius: 4px;
+  }
+  .path-preview .auto-tag {
+    color: var(--af-oranje);
+    font-weight: 500;
+  }
+  .path-preview .missing-tag {
+    color: #7a5c00;
+  }
+
+  /* Header met tandwiel */
+  .app-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .app-head-text { flex: 1; min-width: 0; }
+  .cfg-btn {
+    background: transparent;
+    border: 1px solid var(--af-lijn);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #555;
+    white-space: nowrap;
+  }
+  .cfg-btn:hover { background: var(--af-grijs); color: var(--af-donker); }
+
+  /* Config modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 16px;
+    z-index: 1000;
+  }
+  .modal {
+    background: white;
+    border-radius: 10px;
+    max-width: 640px;
+    width: 100%;
+    padding: 20px 22px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.18);
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  .modal h2 { margin: 0 0 4px; font-size: 17px; }
+  .modal .sub { color: #666; font-size: 12px; margin: 0 0 14px; }
+  .rule-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 36px;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .rule-row input, .rule-row select {
+    padding: 6px 8px;
+    border: 1px solid var(--af-lijn);
+    border-radius: 5px;
+    font-size: 13px;
+    width: 100%;
+    background: white;
+  }
+  .rule-del {
+    background: transparent;
+    border: 1px solid var(--af-lijn);
+    color: #888;
+    border-radius: 5px;
+    padding: 4px 6px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .rule-del:hover { color: var(--af-rood); border-color: var(--af-rood); }
+  .modal-actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
+  .modal .add-rule {
+    background: transparent;
+    border: 1px dashed var(--af-lijn);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #555;
+    margin-top: 4px;
+  }
+  .modal .add-rule:hover { border-color: var(--af-oranje); color: var(--af-oranje); }
 
   /* Actions */
   .actions {
@@ -217,6 +345,41 @@ const TC_API_REGIONS = {
 };
 let TC_API_BASE = TC_API_REGIONS.europe;
 
+// Property Set API — zelfde proxy als tc-viewer (productie-stabiel, CORS-veilig)
+const PSET_PROXY_BASE = 'https://tc-proxy.tom-da0.workers.dev/pset';
+const PSET_REGIONS = {
+  europe: PSET_PROXY_BASE + '/eu',
+  'north america': PSET_PROXY_BASE + '/us',
+  asia: PSET_PROXY_BASE + '/ap',
+};
+let PSET_BASE = PSET_REGIONS.europe;
+
+// Hub endpoint voor project-config (regels voor pad → metadata)
+const HUB_CONFIG_URL = 'https://atfielt-extension-hub.tom-da0.workers.dev/api/extension-config';
+
+// PSet property-UUIDs (fallback — overgenomen uit tc-viewer L1266-1283, VW BVGO schema)
+const PROP_UUIDS = {
+  discipline:      '202e0b40-055c-11ea-9ee0-4f66993176e1',
+  project_fase:    'c83d7d90-055a-11ea-9ee0-4f66993176e1',
+  document_status: 'cbc46730-41af-11ea-9125-af458cfb61c4',
+  document_datum:  '79715f10-055a-11ea-9ee0-4f66993176e1',
+};
+
+// Toegestane waarden per veld (fallback — overgenomen uit tc-viewer L2382-2386)
+const ENUM_VALUES = {
+  discipline: ['Opdrachtgever','Architect','Constructeur','Installateur','Adviseur','Hoofdaannemer','Onderaannemer','Leverancier','Overheid','Nuts','Directievoering','Overig'],
+  project_fase: ['Initiatief','Project definitie','Structuur ontwerp','Voorlopig ontwerp','Definitief ontwerp','Technisch ontwerp','Prijs en contractvorming','Uitvoeringsgereed ontwerp','Realisatie','Gebruik en exploitatie','Project (alle fasen)'],
+  document_status: ['Concept','Voorlopig','Definitief','Vervallen','Voor ontwerp','Voor uitvoering','As built','Intern'],
+};
+
+const FIELD_LABEL = {
+  discipline: 'Discipline',
+  project_fase: 'Fase',
+  document_status: 'Status',
+};
+
+const METADATA_FIELDS = ['discipline', 'project_fase', 'document_status'];
+
 // Permissions die expliciet read-only zijn — alle andere/lege waardes zien we als potentieel schrijfbaar.
 // Als TC later 403 teruggeeft bij upload handelt uploadFile() dat af.
 const DENY_LEVELS = new Set(['READ', 'READONLY', 'NONE', 'VIEW', 'VIEWER', 'DENY']);
@@ -225,8 +388,10 @@ let tcAPI = null;
 let tcToken = null;
 let tcProject = null;
 let writableFolders = []; // [{id, name, path, depth}]
-let queue = []; // [{id, file, description, folderId, suggestedFolderId, progress, status, error}]
+let queue = []; // [{id, file, description, folderId, suggestedFolderId, progress, status, error, metadata, metadataAuto, warn}]
 let nextQueueId = 1;
+let uploadConfig = { rules: [] }; // { rules: [{ depth, field, map? }] }
+let _psetStats = { ok: 0, fail: 0 };
 
 // ============================================================
 //  Init
@@ -264,9 +429,17 @@ async function init() {
   }
 
   const loc = (tcProject.location || 'europe').toLowerCase();
-  if (loc.includes('america') || loc.includes('north')) TC_API_BASE = TC_API_REGIONS['north america'];
-  else if (loc.includes('asia')) TC_API_BASE = TC_API_REGIONS.asia;
-  else TC_API_BASE = TC_API_REGIONS.europe;
+  if (loc.includes('america') || loc.includes('north')) {
+    TC_API_BASE = TC_API_REGIONS['north america'];
+    PSET_BASE = PSET_REGIONS['north america'];
+  } else if (loc.includes('asia')) {
+    TC_API_BASE = TC_API_REGIONS.asia;
+    PSET_BASE = PSET_REGIONS.asia;
+  } else {
+    TC_API_BASE = TC_API_REGIONS.europe;
+    PSET_BASE = PSET_REGIONS.europe;
+  }
+  console.log('[upload] region:', loc, '| TC_API_BASE:', TC_API_BASE, '| PSET_BASE:', PSET_BASE);
 
   if (!tcToken) {
     try {
@@ -305,14 +478,64 @@ async function init() {
   document.getElementById('loading').textContent = 'Mappen ophalen en rechten controleren…';
   writableFolders = await fetchWritableFolders();
 
+  // Project-config voor pad-naar-metadata-regels
+  await loadUploadConfig();
+
   if (window.atfieltHub) {
     window.atfieltHub.logEvent('feature', {
       action: 'folders-loaded',
       writableCount: writableFolders.length,
+      configRules: uploadConfig.rules.length,
     });
   }
 
   renderApp();
+}
+
+// ============================================================
+//  Config uit Extension Hub (regels depth → metadata-veld)
+// ============================================================
+async function loadUploadConfig() {
+  try {
+    const url = HUB_CONFIG_URL + '?slug=' + encodeURIComponent(EXTENSION_SLUG)
+      + '&project=' + encodeURIComponent(tcProject.id) + '&key=metadata-rules';
+    const r = await fetchWithTimeout(url, {
+      headers: { 'Accept': 'application/json' },
+    }, 10000);
+    if (r.status === 404) { console.log('[upload] config nog niet ingesteld — default rules'); return; }
+    if (!r.ok) { console.warn('[upload] config-fetch fout:', r.status); return; }
+    const body = await r.json().catch(() => null);
+    // Hub geeft value terug als object of als JSON-string — handle beide
+    let cfg = body && (body.value || body.config || body);
+    if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch (_) { cfg = null; } }
+    if (cfg && Array.isArray(cfg.rules)) {
+      uploadConfig.rules = cfg.rules.filter(r => r && Number.isFinite(r.depth) && METADATA_FIELDS.indexOf(r.field) >= 0);
+      console.log('[upload] config geladen:', uploadConfig.rules.length, 'regels', uploadConfig.rules);
+    }
+  } catch (e) {
+    console.warn('[upload] config laden mislukt:', e.message);
+  }
+}
+
+async function saveUploadConfig() {
+  const body = {
+    slug: EXTENSION_SLUG,
+    project: tcProject.id,
+    key: 'metadata-rules',
+    value: { rules: uploadConfig.rules },
+    tcToken: tcToken,
+  };
+  const r = await fetchWithTimeout(HUB_CONFIG_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 15000);
+  if (r.status === 403) throw new Error('Alleen projectbeheerders mogen deze regels wijzigen.');
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error('Opslaan mislukt (' + r.status + ') ' + t.slice(0, 200));
+  }
+  return true;
 }
 
 // ============================================================
@@ -393,6 +616,36 @@ async function tcFetch(path, opts) {
   }
   if (opts.raw) return r;
   return r.json();
+}
+
+// ============================================================
+//  PSet fetch helper — voor Trimble Property Set API
+// ============================================================
+async function tcFetchPSet(path, opts) {
+  await _ensureValidToken();
+  opts = opts || {};
+  const headers = Object.assign({
+    Authorization: 'Bearer ' + tcToken,
+    Accept: 'application/json',
+  }, opts.headers || {});
+  var r = await fetchWithTimeout(PSET_BASE + path, {
+    method: opts.method || 'GET',
+    headers: headers,
+    body: opts.body,
+  });
+  if (r.status === 401) {
+    await _ensureValidToken();
+    r = await fetchWithTimeout(PSET_BASE + path, { method: opts.method || 'GET', headers: Object.assign({}, headers, { Authorization: 'Bearer ' + tcToken }), body: opts.body });
+  }
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw new Error('PSet ' + r.status + ' ' + path + ' — ' + txt.slice(0, 200));
+  }
+  if (opts.raw) return r;
+  if (r.status === 204) return null;
+  const txt = await r.text();
+  if (!txt) return null;
+  try { return JSON.parse(txt); } catch (_) { return txt; }
 }
 
 // ============================================================
@@ -535,6 +788,42 @@ function suggestFolder(item) {
 }
 
 // ============================================================
+//  Metadata-suggestie uit folder-pad (op basis van uploadConfig.rules)
+// ============================================================
+function applyMetadataSuggestion(item) {
+  const folder = writableFolders.find(f => f.id === item.folderId);
+  if (!folder) return;
+  // Path-componenten excl. '(projectroot)'
+  const parts = (folder.path && folder.path !== '(projectroot)')
+    ? folder.path.split(' / ').map(s => s.trim()).filter(Boolean)
+    : [];
+  for (const rule of (uploadConfig.rules || [])) {
+    const idx = (rule.depth | 0) - 1; // 1-indexed
+    if (idx < 0 || idx >= parts.length) continue;
+    const field = rule.field;
+    if (METADATA_FIELDS.indexOf(field) < 0) continue;
+    // Respecteer door user handmatig gezette waarden
+    if (item.metadata[field] && !item.metadataAuto[field]) continue;
+    const raw = parts[idx];
+    const mapped = (rule.map && rule.map[raw]) ? rule.map[raw] : raw;
+    // Case-insensitive match tegen enum, retourneer canonieke casing
+    const match = (ENUM_VALUES[field] || []).find(v => v.toLowerCase() === String(mapped).toLowerCase());
+    if (match) {
+      item.metadata[field] = match;
+      item.metadataAuto[field] = true;
+    } else if (item.metadataAuto[field]) {
+      // Eerder auto-ingevuld, nu niet meer matchbaar → leegmaken zodat warning verschijnt
+      item.metadata[field] = '';
+      item.metadataAuto[field] = false;
+    }
+  }
+}
+
+function isMetadataIncomplete(item) {
+  return METADATA_FIELDS.some(f => !item.metadata[f]);
+}
+
+// ============================================================
 //  Upload — TC multipart/form-data
 //  (JSON+signed-URL pattern gaf "Invalid Json" 400 terug)
 // ============================================================
@@ -598,24 +887,71 @@ async function uploadFile(item) {
   const result = attempt.data;
 
   item.progress = 100;
-  item.status = 'done';
-  item.fileId = result.id || result.fileId;
-  renderQueue();
+  item.fileId = result.id || result.fileId || result.versionId;
   console.log('[upload] done:', item.file.name, '| response keys:', Object.keys(result));
+
+  // Metadata via PSet changeset (alleen als er velden zijn)
+  const props = {};
+  for (const f of METADATA_FIELDS) {
+    const v = item.metadata[f];
+    if (v && PROP_UUIDS[f]) props[PROP_UUIDS[f]] = v;
+  }
+  if (item.fileId && Object.keys(props).length) {
+    item.status = 'saving-props';
+    renderQueue();
+    try {
+      await tcFetchPSet('/psets/changeset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{
+            link: 'frn:tcfile:' + item.fileId,
+            libId: 'tcproject:prod:' + tcProject.id,
+            defId: 'tcfiles',
+            props,
+          }],
+        }),
+      });
+      _psetStats.ok++;
+      item.status = 'done';
+      renderQueue();
+    } catch (e) {
+      console.warn('[upload] PSet save mislukt voor', item.file.name, e.message);
+      _psetStats.fail++;
+      item.warn = 'metadata niet opgeslagen: ' + e.message.slice(0, 120);
+      item.status = 'done-warn';
+      renderQueue();
+    }
+  } else {
+    item.status = 'done';
+    renderQueue();
+  }
 }
 
 async function uploadAll() {
   const pending = queue.filter(i => i.status === 'pending' && i.folderId);
   if (!pending.length) return;
 
+  const incomplete = pending.filter(isMetadataIncomplete);
+  if (incomplete.length) {
+    const msg = incomplete.length === 1
+      ? '1 bestand heeft geen volledige metadata (discipline/fase/status). Toch uploaden?'
+      : incomplete.length + ' bestanden hebben geen volledige metadata (discipline/fase/status). Toch uploaden?';
+    if (!confirm(msg)) return;
+  }
+
   document.getElementById('upload-btn').disabled = true;
+  _psetStats = { ok: 0, fail: 0 };
   let ok = 0, fail = 0, totalBytes = 0;
+  let metaComplete = 0, metaWarn = 0;
 
   for (const item of pending) {
+    const wasComplete = !isMetadataIncomplete(item);
     try {
       await uploadFile(item);
       ok++;
       totalBytes += item.file.size;
+      if (wasComplete) metaComplete++; else metaWarn++;
     } catch (e) {
       console.error('[upload] failed', item.file.name, e);
       item.status = 'error';
@@ -633,6 +969,11 @@ async function uploadAll() {
       success: ok,
       failed: fail,
       bytes: totalBytes,
+      metadataComplete: metaComplete,
+      metadataWarn: metaWarn,
+      psetOk: _psetStats.ok,
+      psetFail: _psetStats.fail,
+      configRules: uploadConfig.rules.length,
     });
   }
 }
@@ -645,15 +986,20 @@ function renderApp() {
   document.getElementById('loading').style.display = 'none';
   const app = document.getElementById('app');
   app.style.display = '';
-  document.title = '✅ Projectinformatie toevoegen (v4)';
+  document.title = 'Projectinformatie toevoegen (v5)';
 
   const writableWarn = writableFolders.length === 0
     ? '<div class="warn">Je hebt nergens in dit project schrijfrechten. Neem contact op met de projectbeheerder.</div>'
     : '';
 
   app.innerHTML = `
-    <h1>Documenten toevoegen aan "${escapeHtml(tcProject.name)}"</h1>
-    <p class="subtitle">${writableFolders.length} map${writableFolders.length === 1 ? '' : 'pen'} beschikbaar voor upload</p>
+    <div class="app-head">
+      <div class="app-head-text">
+        <h1>Documenten toevoegen aan "${escapeHtml(tcProject.name)}"</h1>
+        <p class="subtitle">${writableFolders.length} map${writableFolders.length === 1 ? '' : 'pen'} beschikbaar voor upload</p>
+      </div>
+      <button class="cfg-btn" id="cfg-btn" type="button" title="Metadata-regels instellen">⚙ Instellingen</button>
+    </div>
     ${writableWarn}
     <div class="dropzone" id="dropzone">
       <p><strong>Sleep bestanden hierheen</strong></p>
@@ -689,6 +1035,7 @@ function renderApp() {
     renderQueue();
   });
   document.getElementById('upload-btn').addEventListener('click', uploadAll);
+  document.getElementById('cfg-btn').addEventListener('click', openConfigModal);
 }
 
 function addFiles(fileList) {
@@ -703,9 +1050,13 @@ function addFiles(fileList) {
       progress: 0,
       status: 'pending',
       error: null,
+      warn: null,
+      metadata: { discipline: '', project_fase: '', document_status: '' },
+      metadataAuto: { discipline: false, project_fase: false, document_status: false },
     };
     item.suggestedFolderId = suggestFolder(item);
     item.folderId = item.suggestedFolderId;
+    applyMetadataSuggestion(item);
     queue.push(item);
   }
   renderQueue();
@@ -728,18 +1079,21 @@ function renderQueue() {
       `<option value="${f.id}" ${f.id === item.folderId ? 'selected' : ''}>${escapeHtml(f.path || f.name)}</option>`
     ).join('');
 
-    const suggested = writableFolders.find(f => f.id === item.suggestedFolderId);
-    const suggestLine = (suggested && item.status === 'pending')
-      ? `<div class="suggestion">Voorstel: ${escapeHtml(suggested.path || suggested.name)}</div>`
+    const selectedFolder = writableFolders.find(f => f.id === item.folderId);
+    const pathPreview = (selectedFolder && item.status === 'pending')
+      ? renderPathPreview(item, selectedFolder)
       : '';
 
-    const statusLine = item.status === 'done'
-      ? '<div class="status ok">✓ Geüpload</div>'
-      : item.status === 'error'
-      ? `<div class="status err">✗ ${escapeHtml(item.error || 'Fout')}</div>`
-      : '';
+    const metaRow = item.status === 'pending' ? renderMetaRow(item) : '';
 
-    const progressBar = item.status === 'uploading' || item.status === 'done'
+    let statusLine = '';
+    if (item.status === 'done') statusLine = '<div class="status ok">✓ Geüpload</div>';
+    else if (item.status === 'done-warn') statusLine = `<div class="status warn">✓ Geüpload — ${escapeHtml(item.warn || 'metadata niet opgeslagen')}</div>`;
+    else if (item.status === 'saving-props') statusLine = '<div class="status info">Metadata opslaan…</div>';
+    else if (item.status === 'error') statusLine = `<div class="status err">✗ ${escapeHtml(item.error || 'Fout')}</div>`;
+
+    const showProgress = item.status === 'uploading' || item.status === 'done' || item.status === 'done-warn' || item.status === 'saving-props';
+    const progressBar = showProgress
       ? `<div class="progress"><div class="progress-bar" style="width:${item.progress}%"></div></div>`
       : '';
 
@@ -757,7 +1111,8 @@ function renderQueue() {
           <textarea data-field="description" data-id="${item.id}" ${disabled} placeholder="Optioneel…">${escapeHtml(item.description)}</textarea>
           <label>Map</label>
           <select data-field="folderId" data-id="${item.id}" ${disabled}>${folderOpts}</select>
-          ${suggestLine}
+          ${pathPreview}
+          ${metaRow}
           ${progressBar}
           ${statusLine}
         </div>
@@ -803,9 +1158,177 @@ function renderQueue() {
     el.addEventListener('change', () => {
       const id = Number(el.getAttribute('data-id'));
       const item = queue.find(i => i.id === id);
-      if (item) item.folderId = el.value;
+      if (!item) return;
+      item.folderId = el.value;
+      // Reset alleen auto-velden — user-gezette waarden blijven
+      for (const f of METADATA_FIELDS) {
+        if (item.metadataAuto[f]) { item.metadata[f] = ''; item.metadataAuto[f] = false; }
+      }
+      applyMetadataSuggestion(item);
+      renderQueue();
     });
   });
+  qEl.querySelectorAll('select[data-field^="meta-"]').forEach(el => {
+    el.addEventListener('change', () => {
+      const id = Number(el.getAttribute('data-id'));
+      const field = el.getAttribute('data-field').replace(/^meta-/, '');
+      const item = queue.find(i => i.id === id);
+      if (!item || METADATA_FIELDS.indexOf(field) < 0) return;
+      item.metadata[field] = el.value;
+      item.metadataAuto[field] = false;
+      renderQueue();
+    });
+  });
+}
+
+function renderMetaRow(item) {
+  const parts = METADATA_FIELDS.map(field => {
+    const val = item.metadata[field] || '';
+    const missing = !val;
+    const auto = item.metadataAuto[field];
+    const opts = ['<option value="">— kies —</option>'].concat(
+      (ENUM_VALUES[field] || []).map(v =>
+        `<option value="${escapeHtml(v)}" ${v === val ? 'selected' : ''}>${escapeHtml(v)}</option>`
+      )
+    ).join('');
+    const icon = missing ? '<span class="warn-icon" title="Verplicht">⚠</span>' : '';
+    const cls = missing ? 'warn-select' : '';
+    const autoAttr = auto ? ' data-auto="1" title="Automatisch ingevuld op basis van mapstructuur"' : '';
+    return `
+      <div>
+        <label>${escapeHtml(FIELD_LABEL[field])} ${icon}</label>
+        <select class="${cls}" data-field="meta-${field}" data-id="${item.id}"${autoAttr}>${opts}</select>
+      </div>`;
+  }).join('');
+  return `<div class="meta-row">${parts}</div>`;
+}
+
+// ============================================================
+//  Config-modal (metadata-regels instellen — admin)
+// ============================================================
+function openConfigModal() {
+  // Maak een kopie van de huidige regels voor in-modal editing (cancel = discard)
+  const draft = { rules: uploadConfig.rules.map(r => ({ depth: r.depth, field: r.field, map: r.map ? Object.assign({}, r.map) : null })) };
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  const render = () => {
+    const fieldOpts = METADATA_FIELDS.map(f => `<option value="${f}">${escapeHtml(FIELD_LABEL[f])}</option>`).join('');
+    const rulesHtml = draft.rules.length === 0
+      ? '<p class="sub" style="margin:12px 0;">Nog geen regels. Voeg er een toe om metadata automatisch te laten invullen op basis van de mapstructuur.</p>'
+      : draft.rules.map((r, i) => `
+          <div class="rule-row">
+            <input type="number" min="1" max="10" step="1" value="${r.depth}" data-rule-depth="${i}" title="Mapniveau (1 = eerste map onder projectroot)">
+            <select data-rule-field="${i}">
+              ${METADATA_FIELDS.map(f => `<option value="${f}" ${f === r.field ? 'selected' : ''}>${escapeHtml(FIELD_LABEL[f])}</option>`).join('')}
+            </select>
+            <button class="rule-del" data-rule-del="${i}" title="Regel verwijderen">×</button>
+          </div>`).join('');
+
+    modal.innerHTML = `
+      <h2>Metadata-regels</h2>
+      <p class="sub">Per mapniveau bepaal je welk veld wordt afgeleid. Niveau 1 = eerste map onder de projectroot.</p>
+      <div id="rules-list">${rulesHtml}</div>
+      <button type="button" class="add-rule" id="add-rule-btn">+ Regel toevoegen</button>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cfg-cancel">Annuleren</button>
+        <button class="btn btn-primary" id="cfg-save">Opslaan</button>
+      </div>
+      <div id="cfg-msg" style="margin-top:8px;font-size:12px;"></div>
+    `;
+
+    modal.querySelectorAll('input[data-rule-depth]').forEach(el => {
+      el.addEventListener('input', () => {
+        const i = Number(el.getAttribute('data-rule-depth'));
+        const n = parseInt(el.value, 10);
+        if (Number.isFinite(n) && n >= 1 && n <= 10) draft.rules[i].depth = n;
+      });
+    });
+    modal.querySelectorAll('select[data-rule-field]').forEach(el => {
+      el.addEventListener('change', () => {
+        const i = Number(el.getAttribute('data-rule-field'));
+        draft.rules[i].field = el.value;
+      });
+    });
+    modal.querySelectorAll('button[data-rule-del]').forEach(el => {
+      el.addEventListener('click', () => {
+        const i = Number(el.getAttribute('data-rule-del'));
+        draft.rules.splice(i, 1);
+        render();
+      });
+    });
+    modal.querySelector('#add-rule-btn').addEventListener('click', () => {
+      const nextDepth = (draft.rules[draft.rules.length - 1]?.depth || 0) + 1;
+      const usedFields = new Set(draft.rules.map(r => r.field));
+      const firstFree = METADATA_FIELDS.find(f => !usedFields.has(f)) || 'discipline';
+      draft.rules.push({ depth: nextDepth, field: firstFree });
+      render();
+    });
+    modal.querySelector('#cfg-cancel').addEventListener('click', () => backdrop.remove());
+    modal.querySelector('#cfg-save').addEventListener('click', async () => {
+      const msgEl = modal.querySelector('#cfg-msg');
+      const saveBtn = modal.querySelector('#cfg-save');
+      saveBtn.disabled = true;
+      msgEl.style.color = '#555';
+      msgEl.textContent = 'Opslaan…';
+      // Valideer: unieke depth
+      const seen = new Set();
+      for (const r of draft.rules) {
+        if (seen.has(r.depth)) {
+          msgEl.style.color = 'var(--af-rood)';
+          msgEl.textContent = 'Elk mapniveau mag maar één keer voorkomen.';
+          saveBtn.disabled = false;
+          return;
+        }
+        seen.add(r.depth);
+      }
+      const previousRules = uploadConfig.rules;
+      uploadConfig.rules = draft.rules;
+      try {
+        await saveUploadConfig();
+        // Her-suggestie voor pending items
+        for (const item of queue) {
+          if (item.status !== 'pending') continue;
+          for (const f of METADATA_FIELDS) {
+            if (item.metadataAuto[f]) { item.metadata[f] = ''; item.metadataAuto[f] = false; }
+          }
+          applyMetadataSuggestion(item);
+        }
+        renderQueue();
+        backdrop.remove();
+      } catch (e) {
+        uploadConfig.rules = previousRules;
+        msgEl.style.color = 'var(--af-rood)';
+        msgEl.textContent = e.message;
+        saveBtn.disabled = false;
+      }
+    });
+  };
+
+  render();
+}
+
+function renderPathPreview(item, folder) {
+  const pad = folder.path === '(projectroot)'
+    ? '<em>(projectroot)</em>'
+    : escapeHtml(folder.path);
+  const tags = METADATA_FIELDS.map(field => {
+    const v = item.metadata[field];
+    const lbl = escapeHtml(FIELD_LABEL[field]);
+    if (v) {
+      const cls = item.metadataAuto[field] ? 'auto-tag' : '';
+      const suffix = item.metadataAuto[field] ? ' (auto)' : '';
+      return `<span class="${cls}">${lbl}: ${escapeHtml(v)}${suffix}</span>`;
+    }
+    return `<span class="missing-tag">${lbl}: — ontbreekt</span>`;
+  }).join(' · ');
+  return `<div class="path-preview"><strong>Opslag:</strong> ${pad}<br>${tags}</div>`;
 }
 
 // ============================================================

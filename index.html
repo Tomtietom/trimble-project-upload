@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v9 — 2026-04-23 (X-Session header op hub-config calls) -->
-<script>window.__BUILD_VERSION__ = 'v9-2026-04-23';</script>
+<!-- BUILD: v10 — 2026-04-23 (upload via tc-proxy + logEvent type fix) -->
+<script>window.__BUILD_VERSION__ = 'v10-2026-04-23';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -179,14 +179,22 @@ const TC_API_REGIONS = {
 };
 let TC_API_BASE = TC_API_REGIONS.europe;
 
-// Property Set API — zelfde proxy als tc-viewer (productie-stabiel, CORS-veilig)
-const PSET_PROXY_BASE = 'https://tc-proxy.tom-da0.workers.dev/pset';
+// Gedeelde proxy — zelfde als tc-viewer (productie-stabiel, CORS-veilig voor zware calls)
+const PROXY_BASE_URL = 'https://tc-proxy.tom-da0.workers.dev';
 const PSET_REGIONS = {
-  europe: PSET_PROXY_BASE + '/eu',
-  'north america': PSET_PROXY_BASE + '/us',
-  asia: PSET_PROXY_BASE + '/ap',
+  europe: PROXY_BASE_URL + '/pset/eu',
+  'north america': PROXY_BASE_URL + '/pset/us',
+  asia: PROXY_BASE_URL + '/pset/ap',
+};
+// TC REST proxy: /tc/{eu|us|ap}/{path} — gebruikt voor file-uploads (POST /files krijgt
+// in sommige browsers CORS-fout op app21.connect.trimble.com)
+const TC_PROXY_REGIONS = {
+  europe: PROXY_BASE_URL + '/tc/eu',
+  'north america': PROXY_BASE_URL + '/tc/us',
+  asia: PROXY_BASE_URL + '/tc/ap',
 };
 let PSET_BASE = PSET_REGIONS.europe;
+let TC_PROXY_BASE = TC_PROXY_REGIONS.europe;
 
 // Hub endpoint voor project-config (regels voor pad → metadata)
 const HUB_CONFIG_URL = 'https://atfielt-extension-hub.tom-da0.workers.dev/api/extension-config';
@@ -266,14 +274,17 @@ async function init() {
   if (loc.includes('america') || loc.includes('north')) {
     TC_API_BASE = TC_API_REGIONS['north america'];
     PSET_BASE = PSET_REGIONS['north america'];
+    TC_PROXY_BASE = TC_PROXY_REGIONS['north america'];
   } else if (loc.includes('asia')) {
     TC_API_BASE = TC_API_REGIONS.asia;
     PSET_BASE = PSET_REGIONS.asia;
+    TC_PROXY_BASE = TC_PROXY_REGIONS.asia;
   } else {
     TC_API_BASE = TC_API_REGIONS.europe;
     PSET_BASE = PSET_REGIONS.europe;
+    TC_PROXY_BASE = TC_PROXY_REGIONS.europe;
   }
-  console.log('[upload] region:', loc, '| TC_API_BASE:', TC_API_BASE, '| PSET_BASE:', PSET_BASE);
+  console.log('[upload] region:', loc, '| TC_API_BASE:', TC_API_BASE, '| PSET_BASE:', PSET_BASE, '| TC_PROXY_BASE:', TC_PROXY_BASE);
 
   if (!tcToken) {
     try {
@@ -316,8 +327,9 @@ async function init() {
   await loadUploadConfig();
 
   if (window.atfieltHub) {
-    // data-loaded event (consistent met tc-viewer / rechten-viewer / dashboard patroon)
-    window.atfieltHub.logEvent('data-loaded', {
+    // data-loaded als feature-action (hub accepteert alleen type='feature' of 'error')
+    window.atfieltHub.logEvent('feature', {
+      action: 'data-loaded',
       writableFolders: writableFolders.length,
       configRules: uploadConfig.rules.length,
       region: (tcProject.location || 'europe').toLowerCase(),
@@ -723,10 +735,10 @@ async function uploadFile(item) {
     return fd;
   };
 
-  // Één upload-poging via XHR (voor progress events)
+  // Één upload-poging via XHR (voor progress events) — via tc-proxy (CORS-safe)
   const doXhrUpload = () => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', TC_API_BASE + '/files');
+    xhr.open('POST', TC_PROXY_BASE + '/files');
     xhr.setRequestHeader('Authorization', 'Bearer ' + tcToken);
     xhr.setRequestHeader('Accept', 'application/json');
     xhr.upload.onprogress = (e) => {

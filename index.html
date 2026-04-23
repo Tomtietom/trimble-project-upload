@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v10 — 2026-04-23 (upload via tc-proxy + logEvent type fix) -->
-<script>window.__BUILD_VERSION__ = 'v10-2026-04-23';</script>
+<!-- BUILD: v11 — 2026-04-23 (upload 2-staps JSON+signed-URL ipv multipart) -->
+<script>window.__BUILD_VERSION__ = 'v11-2026-04-23';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -714,71 +714,72 @@ function isMetadataIncomplete(item) {
 }
 
 // ============================================================
-//  Upload — TC multipart/form-data
-//  (JSON+signed-URL pattern gaf "Invalid Json" 400 terug)
+//  Upload — TC 2-staps flow (JSON → signed URL → PUT binary)
+//  TC /files accepteert alleen JSON bodies (multipart geeft "Invalid Json" 400).
+//  Stap 1: POST /files met metadata → response bevat uploadUrl + fileId
+//  Stap 2: PUT file-bytes naar uploadUrl (S3/CDN signed URL, geen Bearer nodig)
 // ============================================================
 async function uploadFile(item) {
   item.status = 'uploading';
-  item.progress = 5;
+  item.progress = 3;
   renderQueue();
 
   const folder = writableFolders.find(f => f.id === item.folderId);
   if (!folder) throw new Error('Geen map geselecteerd');
 
-  // Bouwer voor FormData — opnieuw aanroepen bij 401-retry, want FormData kan niet hergebruikt worden na verzending
-  const buildFd = () => {
-    const fd = new FormData();
-    fd.append('file', item.file, item.file.name);
-    fd.append('parentId', folder.id);
-    fd.append('name', item.file.name);
-    if (item.description) fd.append('description', item.description);
-    return fd;
-  };
+  await _ensureValidToken();
 
-  // Één upload-poging via XHR (voor progress events) — via tc-proxy (CORS-safe)
-  const doXhrUpload = () => new Promise((resolve, reject) => {
+  // Stap 1: bestandsmetadata posten — TC retourneert signed uploadUrl
+  const meta = {
+    name: item.file.name,
+    parentId: folder.id,
+    size: item.file.size,
+  };
+  if (item.description) meta.description = item.description;
+
+  let initResp;
+  try {
+    initResp = await tcFetch('/files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(meta),
+    });
+  } catch (e) {
+    throw new Error('Upload-init mislukt: ' + e.message);
+  }
+
+  const fileId = initResp.id || initResp.fileId || initResp.versionId;
+  const uploadUrl = initResp.uploadUrl || initResp.upload_url || initResp.url;
+  if (!uploadUrl) {
+    throw new Error('Geen uploadUrl in TC response: ' + JSON.stringify(initResp).slice(0, 200));
+  }
+  console.log('[upload] init OK:', item.file.name, '| fileId:', fileId, '| uploadUrl host:', uploadUrl.split('/')[2]);
+
+  item.progress = 8;
+  renderQueue();
+
+  // Stap 2: binary via PUT naar signed URL met progress (geen Bearer header!)
+  await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', TC_PROXY_BASE + '/files');
-    xhr.setRequestHeader('Authorization', 'Bearer ' + tcToken);
-    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.open('PUT', uploadUrl);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        item.progress = 5 + Math.round((e.loaded / e.total) * 90);
+        item.progress = 8 + Math.round((e.loaded / e.total) * 87);
         renderQueue();
       }
     };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try { resolve({ ok: true, data: JSON.parse(xhr.responseText || '{}') }); }
-        catch (e) { resolve({ ok: true, data: {} }); }
-      } else if (xhr.status === 401) {
-        // Signaleer 401 apart zodat we kunnen retry'en met vers token
-        resolve({ ok: false, status: 401, body: xhr.responseText || '' });
-      } else {
-        reject(new Error('TC /files ' + xhr.status + ' — ' + (xhr.responseText || '').slice(0, 300)));
-      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error('PUT binary ' + xhr.status + ': ' + (xhr.responseText || '').slice(0, 200)));
     };
-    xhr.onerror = () => reject(new Error('Netwerkfout tijdens upload'));
-    xhr.send(buildFd());
+    xhr.onerror = () => reject(new Error('Netwerkfout tijdens binary-upload'));
+    xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
+    xhr.send(item.file);
   });
 
-  // Eerst zorgen dat token vers is vóór we beginnen (belangrijk bij lange queues)
-  await _ensureValidToken();
-  let attempt = await doXhrUpload();
-  if (!attempt.ok && attempt.status === 401) {
-    console.log('[upload] 401 bij ' + item.file.name + ', token refreshen en opnieuw proberen...');
-    item.progress = 5; renderQueue();
-    await _ensureValidToken();
-    attempt = await doXhrUpload();
-    if (!attempt.ok) {
-      throw new Error('TC /files 401 na token-refresh — ' + (attempt.body || '').slice(0, 300));
-    }
-  }
-  const result = attempt.data;
-
   item.progress = 100;
-  item.fileId = result.id || result.fileId || result.versionId;
-  console.log('[upload] done:', item.file.name, '| response keys:', Object.keys(result));
+  item.fileId = fileId;
+  console.log('[upload] done:', item.file.name);
 
   // Metadata via PSet changeset (alleen als er velden zijn)
   const props = {};

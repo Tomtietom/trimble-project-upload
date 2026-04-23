@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v8 — 2026-04-22 (CORS-fix folders + hub lock-screen + data-loaded event) -->
-<script>window.__BUILD_VERSION__ = 'v8-2026-04-22';</script>
+<!-- BUILD: v9 — 2026-04-23 (X-Session header op hub-config calls) -->
+<script>window.__BUILD_VERSION__ = 'v9-2026-04-23';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -329,15 +329,27 @@ async function init() {
 
 // ============================================================
 //  Config uit Extension Hub (regels depth → metadata-veld)
+//  Hub-sessietoken staat in sessionStorage onder 'atfielt-hub-session'
+//  (gezet door window.atfieltHub.check) — meesturen als X-Session header.
 // ============================================================
+const HUB_SESSION_STORAGE_KEY = 'atfielt-hub-session';
+
+function getHubSessionToken() {
+  try { return sessionStorage.getItem(HUB_SESSION_STORAGE_KEY) || ''; }
+  catch (_) { return ''; }
+}
+
 async function loadUploadConfig() {
   try {
     const url = HUB_CONFIG_URL + '?slug=' + encodeURIComponent(EXTENSION_SLUG)
       + '&project=' + encodeURIComponent(tcProject.id) + '&key=metadata-rules';
-    const r = await fetchWithTimeout(url, {
-      headers: { 'Accept': 'application/json' },
-    }, 10000);
+    const headers = { 'Accept': 'application/json' };
+    const session = getHubSessionToken();
+    if (session) headers['X-Session'] = session;
+    else console.warn('[upload] geen hub-sessietoken in sessionStorage — config-lezen werkt mogelijk niet');
+    const r = await fetchWithTimeout(url, { headers: headers }, 10000);
     if (r.status === 404) { console.log('[upload] config nog niet ingesteld — default rules'); return; }
+    if (r.status === 401) { console.warn('[upload] config 401 — sessietoken ontbreekt/verlopen; default rules'); return; }
     if (!r.ok) { console.warn('[upload] config-fetch fout:', r.status); return; }
     const body = await r.json().catch(() => null);
     // Hub geeft value terug als object of als JSON-string — handle beide
@@ -360,11 +372,16 @@ async function saveUploadConfig() {
     value: { rules: uploadConfig.rules },
     tcToken: tcToken,
   };
+  const headers = { 'Content-Type': 'application/json' };
+  const session = getHubSessionToken();
+  if (session) headers['X-Session'] = session;
+  else throw new Error('Geen geldige hub-sessie — herlaad de extensie.');
   const r = await fetchWithTimeout(HUB_CONFIG_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: JSON.stringify(body),
   }, 15000);
+  if (r.status === 401) throw new Error('Sessie verlopen — herlaad de extensie.');
   if (r.status === 403) throw new Error('Alleen projectbeheerders mogen deze regels wijzigen.');
   if (!r.ok) {
     const t = await r.text().catch(() => '');

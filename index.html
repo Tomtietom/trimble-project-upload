@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v14 — 2026-04-23 (folder-picker fallback: toon alle mappen bij weinig folders / geen match) -->
-<script>window.__BUILD_VERSION__ = 'v14-2026-04-23';</script>
+<!-- BUILD: v15 — 2026-04-23 (single-POST binary upload /files/fs/upload + Content-Type) -->
+<script>window.__BUILD_VERSION__ = 'v15-2026-04-23';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -718,36 +718,6 @@ function isMetadataIncomplete(item) {
 //  Init via POST /files/fs/upload (de dedicated "initiate upload" endpoint).
 //  Response bevat een signed URL waar we de bytes heen PUTten.
 // ============================================================
-async function initUpload(meta) {
-  // TC /files/fs/upload verwacht parentId/name/size als QUERY PARAMS, niet body.
-  // Fout-bericht van TC was expliciet: "Required request parameter 'parentId'...".
-  // We proberen achtereenvolgens verschillende varianten zodat we de juiste ontdekken.
-  const qp = (obj) => Object.entries(obj).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
-  const attempts = [
-    { method: 'POST', path: '/files/fs/upload?' + qp({ parentId: meta.parentId, name: meta.name, size: meta.size }), body: null, label: 'POST qp parentId,name,size' },
-    { method: 'GET',  path: '/files/fs/upload?' + qp({ parentId: meta.parentId, name: meta.name, size: meta.size }), body: null, label: 'GET qp parentId,name,size' },
-    { method: 'POST', path: '/files/fs/upload?' + qp({ parentId: meta.parentId, fileName: meta.name, fileSize: meta.size }), body: null, label: 'POST qp parentId,fileName,fileSize' },
-    { method: 'POST', path: '/files/fs/upload?' + qp({ parentId: meta.parentId, name: meta.name }), body: null, label: 'POST qp zonder size' },
-  ];
-  let lastErr = null;
-  for (let i = 0; i < attempts.length; i++) {
-    const a = attempts[i];
-    try {
-      console.log('[upload] init-attempt', i + 1, '→', a.label, '→', a.path);
-      const opts = { method: a.method, headers: { 'Accept': 'application/json' } };
-      if (a.body) { opts.body = a.body; opts.headers['Content-Type'] = 'application/json'; }
-      const resp = await tcFetch(a.path, opts);
-      console.log('[upload] init OK via attempt', i + 1, '| response:', JSON.stringify(resp).slice(0, 500));
-      return resp;
-    } catch (e) {
-      console.warn('[upload] init-attempt', i + 1, 'faalde:', e.message);
-      lastErr = e;
-      if (!/\b4\d\d\b/.test(e.message)) throw e; // alleen doorgaan bij 4xx
-    }
-  }
-  throw new Error('Alle init-pogingen mislukt. Laatste: ' + (lastErr && lastErr.message || 'onbekend'));
-}
-
 async function uploadFile(item) {
   item.status = 'uploading';
   item.progress = 3;
@@ -758,49 +728,46 @@ async function uploadFile(item) {
 
   await _ensureValidToken();
 
-  const meta = {
-    name: item.file.name,
+  // TC /files/fs/upload: parentId/name/size als query params, file-bytes als body,
+  // Content-Type = file-type (of application/octet-stream). Server-response bevat de file-metadata.
+  const params = new URLSearchParams({
     parentId: folder.id,
-    size: item.file.size,
-  };
-  if (item.description) meta.description = item.description;
+    name: item.file.name,
+    size: String(item.file.size),
+  });
+  const uploadUrl = TC_API_BASE + '/files/fs/upload?' + params.toString();
+  const contentType = item.file.type || 'application/octet-stream';
+  console.log('[upload] start:', item.file.name, '| url:', uploadUrl, '| ct:', contentType);
 
-  // Stap 1: init via POST met heuristische fallbacks
-  const initResp = await initUpload(meta);
-
-  const fileId = initResp.id || initResp.fileId || initResp.versionId;
-  const uploadUrl = initResp.uploadUrl || initResp.upload_url || initResp.url;
-  if (!uploadUrl) {
-    // Volledig response dumpen zodat we de structuur zien
-    throw new Error('Geen uploadUrl in response. Volledige response: ' + JSON.stringify(initResp).slice(0, 500));
-  }
-  console.log('[upload] init OK:', item.file.name, '| fileId:', fileId, '| uploadUrl host:', uploadUrl.split('/')[2]);
-
-  item.progress = 8;
-  renderQueue();
-
-  // Stap 2: binary via PUT naar signed URL (geen Bearer — URL is al signed)
-  await new Promise((resolve, reject) => {
+  const result = await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', uploadUrl);
+    xhr.open('POST', uploadUrl);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + tcToken);
+    xhr.setRequestHeader('Content-Type', contentType);
+    xhr.setRequestHeader('Accept', 'application/json');
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        item.progress = 8 + Math.round((e.loaded / e.total) * 87);
+        item.progress = 5 + Math.round((e.loaded / e.total) * 90);
         renderQueue();
       }
     };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error('PUT binary ' + xhr.status + ': ' + (xhr.responseText || '').slice(0, 200)));
+      console.log('[upload] response:', xhr.status, xhr.responseText.slice(0, 400));
+      if (xhr.status >= 200 && xhr.status < 300) {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) { data = {}; }
+        resolve(data);
+      } else {
+        reject(new Error('TC /files/fs/upload ' + xhr.status + ' — ' + (xhr.responseText || '').slice(0, 300)));
+      }
     };
-    xhr.onerror = () => reject(new Error('Netwerkfout tijdens binary-upload'));
-    xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
+    xhr.onerror = () => reject(new Error('Netwerkfout tijdens upload'));
     xhr.send(item.file);
   });
 
   item.progress = 100;
-  item.fileId = fileId;
-  console.log('[upload] done:', item.file.name);
+  item.fileId = result.id || result.fileId || result.versionId;
+  console.log('[upload] done:', item.file.name, '| fileId:', item.fileId, '| response-keys:', Object.keys(result));
 
   // Metadata via PSet changeset (alleen als er velden zijn)
   const props = {};

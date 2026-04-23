@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v13 — 2026-04-23 (upload-init met parentId/name/size als QUERY params) -->
-<script>window.__BUILD_VERSION__ = 'v13-2026-04-23';</script>
+<!-- BUILD: v14 — 2026-04-23 (folder-picker fallback: toon alle mappen bij weinig folders / geen match) -->
+<script>window.__BUILD_VERSION__ = 'v14-2026-04-23';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -1135,6 +1135,14 @@ function renderFolderPicker(item, selectedFolder) {
   const searchResults = item.folderSearch ? filterFolders(item.folderSearch) : [];
   const anyMeta = METADATA_FIELDS.some(f => item.metadata[f]);
 
+  // Fallback: bij weinig folders (≤20) of zonder score-match alle mappen als lijst tonen.
+  // Gebruiker hoeft dan niet te weten dat er een zoekveld is.
+  let fallbackList = [];
+  const needFallback = !shortlist.length && !item.folderSearch;
+  if (needFallback) {
+    fallbackList = writableFolders.slice(0, Math.min(writableFolders.length, 20));
+  }
+
   let shortlistBlock = '';
   if (shortlist.length) {
     shortlistBlock = `
@@ -1146,13 +1154,23 @@ function renderFolderPicker(item, selectedFolder) {
             ${i === 0 && s.folder.id === item.folderId ? '<span class="badge">TOP</span>' : ''}
           </div>`).join('')}
       </div>`;
+  } else if (fallbackList.length) {
+    const allShown = fallbackList.length >= writableFolders.length;
+    shortlistBlock = `
+      <div class="folder-hint">${allShown ? 'Beschikbare mappen' : 'Eerste ' + fallbackList.length + ' mappen (gebruik zoekveld voor meer)'}${anyMeta ? ' — geen directe metadata-match' : ''}:</div>
+      <div class="folder-list">
+        ${fallbackList.map(f => `
+          <div class="folder-option ${f.id === item.folderId ? 'selected' : ''}" data-folder-pick="${f.id}" data-id="${item.id}">
+            <span>${escapeHtml(f.path || f.name)}</span>
+          </div>`).join('')}
+      </div>`;
   } else if (!anyMeta) {
-    shortlistBlock = `<div class="folder-hint">Vul Discipline/Fase/Status hierboven in voor een voorstel, of zoek hieronder handmatig.</div>`;
-  } else {
-    shortlistBlock = `<div class="folder-hint">Geen directe match gevonden — zoek hieronder handmatig.</div>`;
+    shortlistBlock = `<div class="folder-hint">Vul Discipline/Fase/Status hierboven in voor een voorstel, of zoek hieronder.</div>`;
   }
 
-  const searchBlock = `
+  // Zoekveld alleen tonen als er meer dan ~20 mappen zijn OF de user er zelf iets in typt
+  const showSearch = writableFolders.length > 20 || item.folderSearch;
+  const searchBlock = showSearch ? `
     <input type="text" class="folder-search" data-folder-search="${item.id}"
            placeholder="Zoek in alle ${writableFolders.length} mappen…"
            value="${escapeHtml(item.folderSearch || '')}">
@@ -1163,7 +1181,7 @@ function renderFolderPicker(item, selectedFolder) {
             <span>${escapeHtml(f.path || f.name)}</span>
           </div>`).join('')}
       </div>` : (item.folderSearch ? '<div class="folder-hint">Geen resultaten.</div>' : '')}
-  `;
+  ` : '';
 
   return `<div class="folder-picker">${currentBlock}${shortlistBlock}${searchBlock}</div>`;
 }

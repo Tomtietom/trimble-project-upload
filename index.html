@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v11 — 2026-04-23 (upload 2-staps JSON+signed-URL ipv multipart) -->
-<script>window.__BUILD_VERSION__ = 'v11-2026-04-23';</script>
+<!-- BUILD: v12 — 2026-04-23 (upload-init probe: /files/fs/upload + JSON body fallbacks) -->
+<script>window.__BUILD_VERSION__ = 'v12-2026-04-23';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -714,11 +714,43 @@ function isMetadataIncomplete(item) {
 }
 
 // ============================================================
-//  Upload — TC 2-staps flow (JSON → signed URL → PUT binary)
-//  TC /files accepteert alleen JSON bodies (multipart geeft "Invalid Json" 400).
-//  Stap 1: POST /files met metadata → response bevat uploadUrl + fileId
-//  Stap 2: PUT file-bytes naar uploadUrl (S3/CDN signed URL, geen Bearer nodig)
+//  Upload — TC 2-staps (JSON init → signed URL → PUT binary)
+//  Init via POST /files/fs/upload (de dedicated "initiate upload" endpoint).
+//  Response bevat een signed URL waar we de bytes heen PUTten.
 // ============================================================
+async function initUpload(meta) {
+  // Probeer achtereenvolgens de meest waarschijnlijke endpoints. TC's OpenAPI
+  // is afgeschermd; dit is een heuristische zoektocht op basis van wat werkt.
+  const attempts = [
+    { path: '/files/fs/upload', body: meta },
+    { path: '/files/fs/upload', body: { fileName: meta.name, parentId: meta.parentId, fileSize: meta.size } },
+    { path: '/files', body: meta },
+    { path: '/files', body: [meta] },
+  ];
+  let lastErr = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const a = attempts[i];
+    try {
+      console.log('[upload] init-attempt', i + 1, '→', a.path, '| body:', JSON.stringify(a.body).slice(0, 200));
+      const resp = await tcFetch(a.path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(a.body),
+      });
+      console.log('[upload] init OK via', a.path, '| response keys:', Object.keys(resp || {}));
+      return resp;
+    } catch (e) {
+      console.warn('[upload] init-attempt', i + 1, 'faalde:', e.message);
+      lastErr = e;
+      // Alleen doorgaan bij 400-class body-fouten, niet bij netwerk/auth
+      if (!/\b400\b/.test(e.message) && !/Invalid.?Json|INVALID_JSON|INVALID_OPERATION/i.test(e.message)) {
+        throw e;
+      }
+    }
+  }
+  throw new Error('Alle init-pogingen mislukt. Laatste: ' + (lastErr && lastErr.message || 'onbekend'));
+}
+
 async function uploadFile(item) {
   item.status = 'uploading';
   item.progress = 3;
@@ -729,7 +761,6 @@ async function uploadFile(item) {
 
   await _ensureValidToken();
 
-  // Stap 1: bestandsmetadata posten — TC retourneert signed uploadUrl
   const meta = {
     name: item.file.name,
     parentId: folder.id,
@@ -737,28 +768,21 @@ async function uploadFile(item) {
   };
   if (item.description) meta.description = item.description;
 
-  let initResp;
-  try {
-    initResp = await tcFetch('/files', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(meta),
-    });
-  } catch (e) {
-    throw new Error('Upload-init mislukt: ' + e.message);
-  }
+  // Stap 1: init via POST met heuristische fallbacks
+  const initResp = await initUpload(meta);
 
   const fileId = initResp.id || initResp.fileId || initResp.versionId;
   const uploadUrl = initResp.uploadUrl || initResp.upload_url || initResp.url;
   if (!uploadUrl) {
-    throw new Error('Geen uploadUrl in TC response: ' + JSON.stringify(initResp).slice(0, 200));
+    // Volledig response dumpen zodat we de structuur zien
+    throw new Error('Geen uploadUrl in response. Volledige response: ' + JSON.stringify(initResp).slice(0, 500));
   }
   console.log('[upload] init OK:', item.file.name, '| fileId:', fileId, '| uploadUrl host:', uploadUrl.split('/')[2]);
 
   item.progress = 8;
   renderQueue();
 
-  // Stap 2: binary via PUT naar signed URL met progress (geen Bearer header!)
+  // Stap 2: binary via PUT naar signed URL (geen Bearer — URL is al signed)
   await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', uploadUrl);

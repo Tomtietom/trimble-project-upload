@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v15 — 2026-04-23 (single-POST binary upload /files/fs/upload + Content-Type) -->
-<script>window.__BUILD_VERSION__ = 'v15-2026-04-23';</script>
+<!-- BUILD: v16 — 2026-04-23 (altijd application/octet-stream ipv file.type) -->
+<script>window.__BUILD_VERSION__ = 'v16-2026-04-23';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -736,7 +736,8 @@ async function uploadFile(item) {
     size: String(item.file.size),
   });
   const uploadUrl = TC_API_BASE + '/files/fs/upload?' + params.toString();
-  const contentType = item.file.type || 'application/octet-stream';
+  // TC weigert file-specifieke content-types (bv. application/pdf → 415). Altijd octet-stream.
+  const contentType = 'application/octet-stream';
   console.log('[upload] start:', item.file.name, '| url:', uploadUrl, '| ct:', contentType);
 
   const result = await new Promise((resolve, reject) => {

@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v22 — 2026-04-24 (response-veld uploadURL hoofdletters) -->
-<script>window.__BUILD_VERSION__ = 'v22-2026-04-24';</script>
+<!-- BUILD: v23 — 2026-04-24 (beter folder-advies: filename-patterns + synoniemen + config-import) -->
+<script>window.__BUILD_VERSION__ = 'v23-2026-04-24';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -130,7 +130,9 @@
   .modal h2{font-family:'Montserrat',sans-serif;margin:0 0 var(--s1);font-size:20px;font-weight:700}
   .modal .sub{color:var(--g5);font-size:var(--fs-sm);margin:0 0 var(--s4)}
   .rule-row{display:grid;grid-template-columns:100px 1fr 40px;gap:var(--s2);align-items:center;margin-bottom:var(--s2)}
+  .rule-row.pattern-row{grid-template-columns:1.5fr 1fr 1fr 40px}
   .rule-row input,.rule-row select{padding:8px 10px;border:1px solid var(--hl);border-radius:var(--r-sm);font-size:var(--fs-md);width:100%;background:#fff;font-family:'Poppins',sans-serif;color:var(--dk);outline:none}
+  .modal code{background:var(--gr);padding:1px 5px;border-radius:3px;font-size:var(--fs-sm);font-family:'SFMono-Regular',Menlo,Consolas,monospace}
   .rule-row input:focus,.rule-row select:focus{border-color:var(--af)}
   .rule-del{background:transparent;border:1px solid var(--hl);color:var(--g4);border-radius:var(--r-sm);padding:6px 8px;cursor:pointer;font-size:15px;transition:all .15s}
   .rule-del:hover{color:var(--warn);border-color:var(--warn)}
@@ -232,7 +234,10 @@ let tcProject = null;
 let writableFolders = []; // [{id, name, path, depth}]
 let queue = []; // [{id, file, description, folderId, folderAuto, folderShortlist, folderSearch, folderPickerOpen, progress, status, error, warn, metadata, metadataAuto}]
 let nextQueueId = 1;
-let uploadConfig = { rules: [] }; // { rules: [{ depth, field, map? }] }
+let uploadConfig = { rules: [], filePatterns: [], synonyms: {} };
+// rules:        [{ depth, field, map? }]        — folder-pad → metadata
+// filePatterns: [{ regex, field, value }]       — bestandsnaam → metadata (auto-fill bij drop)
+// synonyms:     { field: { alias: canonical } } — aliassen voor folder-matching (bv. VO → Voorlopig ontwerp)
 let _psetStats = { ok: 0, fail: 0 };
 
 // ============================================================
@@ -369,11 +374,67 @@ async function loadUploadConfig() {
     if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch (_) { cfg = null; } }
     if (cfg && Array.isArray(cfg.rules)) {
       uploadConfig.rules = cfg.rules.filter(r => r && Number.isFinite(r.depth) && METADATA_FIELDS.indexOf(r.field) >= 0);
-      console.log('[upload] config geladen:', uploadConfig.rules.length, 'regels', uploadConfig.rules);
     }
+    if (cfg && Array.isArray(cfg.filePatterns)) {
+      uploadConfig.filePatterns = cfg.filePatterns.filter(p =>
+        p && typeof p.regex === 'string' && METADATA_FIELDS.indexOf(p.field) >= 0 && typeof p.value === 'string'
+      );
+    }
+    if (cfg && cfg.synonyms && typeof cfg.synonyms === 'object') {
+      const clean = {};
+      for (const f of METADATA_FIELDS) {
+        const src = cfg.synonyms[f];
+        if (src && typeof src === 'object') {
+          const map = {};
+          for (const alias in src) {
+            const canon = src[alias];
+            if (typeof alias === 'string' && typeof canon === 'string' && alias && canon) map[alias] = canon;
+          }
+          if (Object.keys(map).length) clean[f] = map;
+        }
+      }
+      uploadConfig.synonyms = clean;
+    }
+    const synCount = Object.values(uploadConfig.synonyms).reduce((n, m) => n + Object.keys(m).length, 0);
+    console.log('[upload] config geladen:', uploadConfig.rules.length, 'pad-regels,',
+      uploadConfig.filePatterns.length, 'bestandsnaam-patronen,', synCount, 'synoniemen');
   } catch (e) {
     console.warn('[upload] config laden mislukt:', e.message);
   }
+}
+
+// Haalt projectenlijst op waar de user lid is. Simpel, geen paginering — TC geeft
+// meestal alle projecten in één call. Gecached per sessie.
+let _projectListCache = null;
+async function fetchProjectList() {
+  if (_projectListCache) return _projectListCache;
+  try {
+    const arr = await tcFetch('/projects');
+    const list = (Array.isArray(arr) ? arr : (arr.items || []))
+      .map(p => ({ id: p.id, name: p.name || '(naamloos)' }))
+      .filter(p => p.id);
+    _projectListCache = list;
+    return list;
+  } catch (e) {
+    console.warn('[upload] projectenlijst ophalen mislukt:', e.message);
+    return [];
+  }
+}
+
+// Haal config van ANDER project — zelfde hub-endpoint maar andere project-id.
+async function fetchConfigForProject(projectId) {
+  const url = HUB_CONFIG_URL + '?slug=' + encodeURIComponent(EXTENSION_SLUG)
+    + '&project=' + encodeURIComponent(projectId) + '&key=metadata-rules';
+  const headers = { 'Accept': 'application/json' };
+  const session = getHubSessionToken();
+  if (session) headers['X-Session'] = session;
+  const r = await fetchWithTimeout(url, { headers: headers }, 10000);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('Hub gaf ' + r.status);
+  const body = await r.json().catch(() => null);
+  let cfg = body && (body.value || body.config || body);
+  if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch (_) { cfg = null; } }
+  return cfg || null;
 }
 
 async function saveUploadConfig() {
@@ -381,7 +442,7 @@ async function saveUploadConfig() {
     slug: EXTENSION_SLUG,
     project: tcProject.id,
     key: 'metadata-rules',
-    value: { rules: uploadConfig.rules },
+    value: { rules: uploadConfig.rules, filePatterns: uploadConfig.filePatterns, synonyms: uploadConfig.synonyms },
     tcToken: tcToken,
   };
   const headers = { 'Content-Type': 'application/json' };
@@ -604,21 +665,41 @@ function normalizeFolderPart(s) {
     .trim();
 }
 
+// Haal alle termen op die als "gelijk" aan de canonieke metadata-waarde gelden:
+// de waarde zelf + eventuele synoniemen uit config. Allemaal lowercase.
+function synonymsFor(field, canonicalValue) {
+  const base = String(canonicalValue || '').toLowerCase().trim();
+  const out = base ? [base] : [];
+  const synMap = (uploadConfig.synonyms && uploadConfig.synonyms[field]) || {};
+  // synMap is alias → canoniek. Voeg alle aliases toe die naar deze canonieke waarde verwijzen.
+  for (const alias in synMap) {
+    if (String(synMap[alias] || '').toLowerCase() === base) {
+      out.push(String(alias).toLowerCase());
+    }
+  }
+  return out;
+}
+
 // Score één folder tegen een item (metadata + bestandsnaam + description)
 function scoreFolder(folder, item) {
   if (!folder || folder.path === '(projectroot)') return 0;
   const parts = folder.path.split(' / ').map(normalizeFolderPart);
   let score = 0;
 
-  // Per ingevuld metadata-veld: substring-match in path-component
+  // Per ingevuld metadata-veld: substring-match in path-component (incl. synoniemen)
   for (const f of METADATA_FIELDS) {
-    const val = (item.metadata[f] || '').toLowerCase().trim();
-    if (!val) continue;
+    const canonical = (item.metadata[f] || '').trim();
+    if (!canonical) continue;
+    const terms = synonymsFor(f, canonical);
     let best = 0;
     for (const p of parts) {
       if (!p) continue;
-      if (p === val) { best = Math.max(best, 15); break; }
-      if (p.includes(val) || val.includes(p)) best = Math.max(best, 10);
+      for (const val of terms) {
+        if (!val) continue;
+        if (p === val) { best = Math.max(best, 15); }
+        else if (p.includes(val) || val.includes(p)) best = Math.max(best, 10);
+      }
+      if (best === 15) break;
     }
     score += best;
   }
@@ -680,6 +761,31 @@ function recomputeFolderSuggestion(item) {
 // ============================================================
 //  Metadata-suggestie uit folder-pad (op basis van uploadConfig.rules)
 // ============================================================
+// ============================================================
+//  Bestandsnaam-patroonregels — auto-fill metadata uit file.name/description
+//  Regels zijn [{regex, field, value}] uit uploadConfig.filePatterns.
+//  Overschrijft alleen leeg of eerder auto-ingevulde velden (respect user-keuze).
+// ============================================================
+function applyFilenamePatterns(item) {
+  const patterns = uploadConfig.filePatterns || [];
+  if (!patterns.length || !item || !item.file) return;
+  const haystack = (item.file.name || '') + ' ' + (item.description || '');
+  for (const p of patterns) {
+    if (!p || !p.regex || !p.field || !p.value) continue;
+    if (METADATA_FIELDS.indexOf(p.field) < 0) continue;
+    // User-ingevulde waarde (niet-auto) niet overschrijven
+    if (item.metadata[p.field] && !item.metadataAuto[p.field]) continue;
+    let re;
+    try { re = new RegExp(p.regex); } catch (_) { continue; }
+    if (!re.test(haystack)) continue;
+    // Waarde case-insensitive naar canonieke enum-casing mappen
+    const match = (ENUM_VALUES[p.field] || []).find(v => v.toLowerCase() === String(p.value).toLowerCase());
+    const finalValue = match || p.value;
+    item.metadata[p.field] = finalValue;
+    item.metadataAuto[p.field] = true;
+  }
+}
+
 function applyMetadataSuggestion(item) {
   const folder = writableFolders.find(f => f.id === item.folderId);
   if (!folder) return;
@@ -696,8 +802,17 @@ function applyMetadataSuggestion(item) {
     if (item.metadata[field] && !item.metadataAuto[field]) continue;
     const raw = parts[idx];
     const mapped = (rule.map && rule.map[raw]) ? rule.map[raw] : raw;
-    // Case-insensitive match tegen enum, retourneer canonieke casing
-    const match = (ENUM_VALUES[field] || []).find(v => v.toLowerCase() === String(mapped).toLowerCase());
+    // Resolve via synoniemen (alias → canoniek) voor we tegen enum matchen
+    const synMap = (uploadConfig.synonyms && uploadConfig.synonyms[field]) || {};
+    let resolved = String(mapped);
+    for (const alias in synMap) {
+      if (alias.toLowerCase() === resolved.toLowerCase()) { resolved = synMap[alias]; break; }
+    }
+    // Normaliseer ook het (mogelijk nog steeds prefix-achtige) path-component
+    const normalized = normalizeFolderPart(resolved);
+    const match = (ENUM_VALUES[field] || []).find(v =>
+      v.toLowerCase() === resolved.toLowerCase() || v.toLowerCase() === normalized
+    );
     if (match) {
       item.metadata[field] = match;
       item.metadataAuto[field] = true;
@@ -967,8 +1082,9 @@ function addFiles(fileList) {
       metadata: { discipline: '', project_fase: '', document_status: '' },
       metadataAuto: { discipline: false, project_fase: false, document_status: false },
     };
-    recomputeFolderSuggestion(item);
-    applyMetadataSuggestion(item);
+    applyFilenamePatterns(item);     // 1. metadata auto-vullen uit bestandsnaam
+    recomputeFolderSuggestion(item); // 2. folder scoren met nu ingevulde metadata
+    applyMetadataSuggestion(item);   // 3. resterende auto-velden uit folder-pad
     queue.push(item);
   }
   renderQueue();
@@ -1042,6 +1158,7 @@ function renderQueue() {
       const item = queue.find(i => i.id === id);
       if (!item) return;
       item.description = el.value;
+      applyFilenamePatterns(item);
       recomputeFolderSuggestion(item);
       // Focus herstellen op de textarea na re-render
       const activeId = document.activeElement?.getAttribute('data-id');
@@ -1211,8 +1328,18 @@ function renderMetaRow(item) {
 //  Config-modal (metadata-regels instellen — admin)
 // ============================================================
 function openConfigModal() {
-  // Maak een kopie van de huidige regels voor in-modal editing (cancel = discard)
-  const draft = { rules: uploadConfig.rules.map(r => ({ depth: r.depth, field: r.field, map: r.map ? Object.assign({}, r.map) : null })) };
+  // Werkkopie voor in-modal editing (cancel = discard)
+  // synoniemen worden platgeslagen tot een array [{field, alias, canonical}] zodat editor-UI simpel is
+  const flatSynonyms = [];
+  for (const f of METADATA_FIELDS) {
+    const src = (uploadConfig.synonyms && uploadConfig.synonyms[f]) || {};
+    for (const alias in src) flatSynonyms.push({ field: f, alias, canonical: src[alias] });
+  }
+  const draft = {
+    rules: uploadConfig.rules.map(r => ({ depth: r.depth, field: r.field, map: r.map ? Object.assign({}, r.map) : null })),
+    filePatterns: (uploadConfig.filePatterns || []).map(p => ({ regex: p.regex, field: p.field, value: p.value })),
+    synonyms: flatSynonyms,
+  };
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
@@ -1222,24 +1349,69 @@ function openConfigModal() {
   backdrop.appendChild(modal);
   document.body.appendChild(backdrop);
 
+  const fieldOptionsFor = (selected) =>
+    METADATA_FIELDS.map(f => `<option value="${f}" ${f === selected ? 'selected' : ''}>${escapeHtml(FIELD_LABEL[f])}</option>`).join('');
+
   const render = () => {
-    const fieldOpts = METADATA_FIELDS.map(f => `<option value="${f}">${escapeHtml(FIELD_LABEL[f])}</option>`).join('');
     const rulesHtml = draft.rules.length === 0
-      ? '<p class="sub" style="margin:12px 0;">Nog geen regels. Voeg er een toe om metadata automatisch te laten invullen op basis van de mapstructuur.</p>'
+      ? '<p class="sub" style="margin:8px 0 12px;">Nog geen regels. Voeg er een toe om metadata automatisch af te leiden uit het pad.</p>'
       : draft.rules.map((r, i) => `
           <div class="rule-row">
             <input type="number" min="1" max="10" step="1" value="${r.depth}" data-rule-depth="${i}" title="Mapniveau (1 = eerste map onder projectroot)">
-            <select data-rule-field="${i}">
-              ${METADATA_FIELDS.map(f => `<option value="${f}" ${f === r.field ? 'selected' : ''}>${escapeHtml(FIELD_LABEL[f])}</option>`).join('')}
-            </select>
+            <select data-rule-field="${i}">${fieldOptionsFor(r.field)}</select>
             <button class="rule-del" data-rule-del="${i}" title="Regel verwijderen">×</button>
+          </div>`).join('');
+
+    const patternsHtml = draft.filePatterns.length === 0
+      ? '<p class="sub" style="margin:8px 0 12px;">Nog geen bestandsnaam-patronen. Voeg er een toe om metadata automatisch te vullen bij het slepen van een bestand.</p>'
+      : draft.filePatterns.map((p, i) => `
+          <div class="rule-row pattern-row">
+            <input type="text" value="${escapeHtml(p.regex)}" data-pat-regex="${i}" placeholder="bv. (?i)\\bVO\\b" title="Regex — matcht tegen bestandsnaam + beschrijving">
+            <select data-pat-field="${i}">${fieldOptionsFor(p.field)}</select>
+            <input type="text" value="${escapeHtml(p.value)}" data-pat-value="${i}" placeholder="waarde" title="Waarde die bij match wordt ingevuld">
+            <button class="rule-del" data-pat-del="${i}" title="Regel verwijderen">×</button>
+          </div>`).join('');
+
+    const synonymsHtml = draft.synonyms.length === 0
+      ? '<p class="sub" style="margin:8px 0 12px;">Nog geen synoniemen. Handig als je mapnamen afkortingen bevatten (VO, DO, ARC, ...).</p>'
+      : draft.synonyms.map((s, i) => `
+          <div class="rule-row pattern-row">
+            <select data-syn-field="${i}">${fieldOptionsFor(s.field)}</select>
+            <input type="text" value="${escapeHtml(s.alias)}" data-syn-alias="${i}" placeholder="alias (zoals in mapnaam)" title="Alias zoals die in het folder-pad verschijnt">
+            <input type="text" value="${escapeHtml(s.canonical)}" data-syn-canon="${i}" placeholder="canonieke waarde" title="Metadata-waarde die deze alias voorstelt">
+            <button class="rule-del" data-syn-del="${i}" title="Synoniem verwijderen">×</button>
           </div>`).join('');
 
     modal.innerHTML = `
       <h2>Metadata-regels</h2>
-      <p class="sub">Per mapniveau bepaal je welk veld wordt afgeleid. Niveau 1 = eerste map onder de projectroot.</p>
+      <p class="sub">Automatisch metadata afleiden zodat je de juiste map als voorstel krijgt.</p>
+
+      <div id="import-box" style="background:var(--afl);border-left:3px solid var(--af);border-radius:var(--r-sm);padding:var(--s3);margin:var(--s3) 0 var(--s4);">
+        <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;">
+          <span style="font-size:var(--fs-sm);color:var(--dk);font-weight:500;">📥 Importeer van ander project:</span>
+          <select id="import-project" style="flex:1;min-width:200px;padding:6px 8px;border:1px solid var(--hl);border-radius:var(--r-sm);font-family:'Poppins',sans-serif;font-size:var(--fs-sm);background:#fff;">
+            <option value="">— kiezen —</option>
+          </select>
+          <button type="button" class="btn btn-ghost" id="import-btn" style="padding:6px 14px;font-size:var(--fs-sm);">Haal op</button>
+        </div>
+        <div id="import-msg" style="font-size:var(--fs-xs);color:var(--g5);margin-top:6px;"></div>
+      </div>
+
+      <h3 style="font-size:14px;margin:18px 0 4px;font-family:'Montserrat',sans-serif;">Pad → metadata</h3>
+      <p class="sub" style="margin:0 0 8px;">Per mapniveau: welk veld komt uit die map-naam. Niveau 1 = eerste map onder projectroot.</p>
       <div id="rules-list">${rulesHtml}</div>
       <button type="button" class="add-rule" id="add-rule-btn">+ Regel toevoegen</button>
+
+      <h3 style="font-size:14px;margin:22px 0 4px;font-family:'Montserrat',sans-serif;">Bestandsnaam → metadata</h3>
+      <p class="sub" style="margin:0 0 8px;">Regex-patroon matcht tegen bestandsnaam + beschrijving. Bv. <code>(?i)\\bUO\\b</code> → Fase = Uitvoeringsontwerp.</p>
+      <div id="patterns-list">${patternsHtml}</div>
+      <button type="button" class="add-rule" id="add-pattern-btn">+ Patroon toevoegen</button>
+
+      <h3 style="font-size:14px;margin:22px 0 4px;font-family:'Montserrat',sans-serif;">Synoniemen</h3>
+      <p class="sub" style="margin:0 0 8px;">Map afkortingen in mapnamen naar de canonieke metadata-waarde. Bv. <code>VO</code> → <code>Voorlopig ontwerp</code>.</p>
+      <div id="synonyms-list">${synonymsHtml}</div>
+      <button type="button" class="add-rule" id="add-synonym-btn">+ Synoniem toevoegen</button>
+
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cfg-cancel">Annuleren</button>
         <button class="btn btn-primary" id="cfg-save">Opslaan</button>
@@ -1247,6 +1419,7 @@ function openConfigModal() {
       <div id="cfg-msg" style="margin-top:8px;font-size:12px;"></div>
     `;
 
+    // === Pad-regel handlers ===
     modal.querySelectorAll('input[data-rule-depth]').forEach(el => {
       el.addEventListener('input', () => {
         const i = Number(el.getAttribute('data-rule-depth'));
@@ -1262,8 +1435,7 @@ function openConfigModal() {
     });
     modal.querySelectorAll('button[data-rule-del]').forEach(el => {
       el.addEventListener('click', () => {
-        const i = Number(el.getAttribute('data-rule-del'));
-        draft.rules.splice(i, 1);
+        draft.rules.splice(Number(el.getAttribute('data-rule-del')), 1);
         render();
       });
     });
@@ -1274,6 +1446,133 @@ function openConfigModal() {
       draft.rules.push({ depth: nextDepth, field: firstFree });
       render();
     });
+
+    // === Bestandsnaam-patroon handlers ===
+    modal.querySelectorAll('input[data-pat-regex]').forEach(el => {
+      el.addEventListener('input', () => {
+        draft.filePatterns[Number(el.getAttribute('data-pat-regex'))].regex = el.value;
+      });
+    });
+    modal.querySelectorAll('select[data-pat-field]').forEach(el => {
+      el.addEventListener('change', () => {
+        draft.filePatterns[Number(el.getAttribute('data-pat-field'))].field = el.value;
+      });
+    });
+    modal.querySelectorAll('input[data-pat-value]').forEach(el => {
+      el.addEventListener('input', () => {
+        draft.filePatterns[Number(el.getAttribute('data-pat-value'))].value = el.value;
+      });
+    });
+    modal.querySelectorAll('button[data-pat-del]').forEach(el => {
+      el.addEventListener('click', () => {
+        draft.filePatterns.splice(Number(el.getAttribute('data-pat-del')), 1);
+        render();
+      });
+    });
+    modal.querySelector('#add-pattern-btn').addEventListener('click', () => {
+      draft.filePatterns.push({ regex: '', field: 'project_fase', value: '' });
+      render();
+    });
+
+    // === Synoniemen handlers ===
+    modal.querySelectorAll('select[data-syn-field]').forEach(el => {
+      el.addEventListener('change', () => {
+        draft.synonyms[Number(el.getAttribute('data-syn-field'))].field = el.value;
+      });
+    });
+    modal.querySelectorAll('input[data-syn-alias]').forEach(el => {
+      el.addEventListener('input', () => {
+        draft.synonyms[Number(el.getAttribute('data-syn-alias'))].alias = el.value;
+      });
+    });
+    modal.querySelectorAll('input[data-syn-canon]').forEach(el => {
+      el.addEventListener('input', () => {
+        draft.synonyms[Number(el.getAttribute('data-syn-canon'))].canonical = el.value;
+      });
+    });
+    modal.querySelectorAll('button[data-syn-del]').forEach(el => {
+      el.addEventListener('click', () => {
+        draft.synonyms.splice(Number(el.getAttribute('data-syn-del')), 1);
+        render();
+      });
+    });
+    modal.querySelector('#add-synonym-btn').addEventListener('click', () => {
+      draft.synonyms.push({ field: 'project_fase', alias: '', canonical: '' });
+      render();
+    });
+
+    // === Import-dropdown vullen (async, één keer per modal-sessie volstaat) ===
+    const projectSel = modal.querySelector('#import-project');
+    if (projectSel && projectSel.options.length <= 1) {
+      fetchProjectList().then(list => {
+        const filtered = list.filter(p => p.id !== tcProject.id);
+        if (!filtered.length) {
+          projectSel.innerHTML = '<option value="">— geen andere projecten —</option>';
+          projectSel.disabled = true;
+          return;
+        }
+        filtered.sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+        projectSel.innerHTML = '<option value="">— kiezen —</option>' + filtered.map(p =>
+          `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`
+        ).join('');
+      });
+    }
+
+    // === Import-knop handler ===
+    const importBtn = modal.querySelector('#import-btn');
+    const importMsg = modal.querySelector('#import-msg');
+    if (importBtn) {
+      importBtn.addEventListener('click', async () => {
+        const pid = projectSel.value;
+        if (!pid) { importMsg.textContent = 'Kies eerst een project.'; importMsg.style.color = 'var(--af-rood)'; return; }
+        importBtn.disabled = true;
+        importMsg.style.color = 'var(--g5)';
+        importMsg.textContent = 'Ophalen…';
+        try {
+          const cfg = await fetchConfigForProject(pid);
+          if (!cfg) {
+            importMsg.style.color = 'var(--af-rood)';
+            importMsg.textContent = 'Dat project heeft nog geen regels ingesteld.';
+            importBtn.disabled = false;
+            return;
+          }
+          // Overschrijf draft (na bevestiging)
+          const totalOld = draft.rules.length + draft.filePatterns.length + draft.synonyms.length;
+          if (totalOld > 0 && !confirm('Huidige regels overschrijven met die van het andere project?')) {
+            importBtn.disabled = false;
+            importMsg.textContent = '';
+            return;
+          }
+          draft.rules = Array.isArray(cfg.rules)
+            ? cfg.rules.filter(r => r && Number.isFinite(r.depth) && METADATA_FIELDS.indexOf(r.field) >= 0)
+                       .map(r => ({ depth: r.depth, field: r.field, map: r.map ? Object.assign({}, r.map) : null }))
+            : [];
+          draft.filePatterns = Array.isArray(cfg.filePatterns)
+            ? cfg.filePatterns.filter(p => p && typeof p.regex === 'string' && METADATA_FIELDS.indexOf(p.field) >= 0 && typeof p.value === 'string')
+                               .map(p => ({ regex: p.regex, field: p.field, value: p.value }))
+            : [];
+          draft.synonyms = [];
+          if (cfg.synonyms && typeof cfg.synonyms === 'object') {
+            for (const f of METADATA_FIELDS) {
+              const src = cfg.synonyms[f] || {};
+              for (const alias in src) {
+                if (typeof alias === 'string' && typeof src[alias] === 'string') {
+                  draft.synonyms.push({ field: f, alias, canonical: src[alias] });
+                }
+              }
+            }
+          }
+          importMsg.style.color = 'var(--ok)';
+          importMsg.textContent = `✓ Overgenomen: ${draft.rules.length} pad-regels, ${draft.filePatterns.length} patronen, ${draft.synonyms.length} synoniemen — nog niet opgeslagen.`;
+          render();
+        } catch (e) {
+          importMsg.style.color = 'var(--af-rood)';
+          importMsg.textContent = 'Fout bij ophalen: ' + e.message;
+          importBtn.disabled = false;
+        }
+      });
+    }
+
     modal.querySelector('#cfg-cancel').addEventListener('click', () => backdrop.remove());
     modal.querySelector('#cfg-save').addEventListener('click', async () => {
       const msgEl = modal.querySelector('#cfg-msg');
@@ -1281,7 +1580,8 @@ function openConfigModal() {
       saveBtn.disabled = true;
       msgEl.style.color = '#555';
       msgEl.textContent = 'Opslaan…';
-      // Valideer: unieke depth
+
+      // Valideer pad-regels: unieke depth
       const seen = new Set();
       for (const r of draft.rules) {
         if (seen.has(r.depth)) {
@@ -1292,22 +1592,64 @@ function openConfigModal() {
         }
         seen.add(r.depth);
       }
+      // Valideer bestandsnaam-patronen: regex moet parsebaar zijn en waarde niet leeg
+      for (const p of draft.filePatterns) {
+        if (!p.regex || !p.value) {
+          msgEl.style.color = 'var(--af-rood)';
+          msgEl.textContent = 'Een bestandsnaam-patroon heeft lege regex of waarde.';
+          saveBtn.disabled = false;
+          return;
+        }
+        try { new RegExp(p.regex); }
+        catch (e) {
+          msgEl.style.color = 'var(--af-rood)';
+          msgEl.textContent = 'Ongeldige regex: ' + p.regex;
+          saveBtn.disabled = false;
+          return;
+        }
+      }
+
+      // Valideer synoniemen: geen lege alias of canoniek
+      for (const s of draft.synonyms) {
+        if (!s.alias || !s.canonical) {
+          msgEl.style.color = 'var(--af-rood)';
+          msgEl.textContent = 'Een synoniem heeft lege alias of waarde.';
+          saveBtn.disabled = false;
+          return;
+        }
+      }
+
+      // Flat synonyms-array omzetten naar { field: { alias: canonical } }
+      const synObj = {};
+      for (const s of draft.synonyms) {
+        if (!synObj[s.field]) synObj[s.field] = {};
+        synObj[s.field][s.alias] = s.canonical;
+      }
+
       const previousRules = uploadConfig.rules;
+      const previousPatterns = uploadConfig.filePatterns;
+      const previousSyn = uploadConfig.synonyms;
       uploadConfig.rules = draft.rules;
+      uploadConfig.filePatterns = draft.filePatterns;
+      uploadConfig.synonyms = synObj;
       try {
         await saveUploadConfig();
-        // Her-suggestie voor pending items
+        // Her-suggestie voor pending items met nieuwe config
         for (const item of queue) {
           if (item.status !== 'pending') continue;
           for (const f of METADATA_FIELDS) {
             if (item.metadataAuto[f]) { item.metadata[f] = ''; item.metadataAuto[f] = false; }
           }
+          applyFilenamePatterns(item);
+          recomputeFolderSuggestion(item);
           applyMetadataSuggestion(item);
         }
         renderQueue();
         backdrop.remove();
       } catch (e) {
         uploadConfig.rules = previousRules;
+        uploadConfig.filePatterns = previousPatterns;
+        uploadConfig.synonyms = previousSyn;
         msgEl.style.color = 'var(--af-rood)';
         msgEl.textContent = e.message;
         saveBtn.disabled = false;

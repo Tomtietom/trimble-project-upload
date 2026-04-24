@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v19 — 2026-04-24 (Name met hoofdletter N in query params) -->
-<script>window.__BUILD_VERSION__ = 'v19-2026-04-24';</script>
+<!-- BUILD: v20 — 2026-04-24 (handmatige URL-encoding %20 ipv + voor query-params) -->
+<script>window.__BUILD_VERSION__ = 'v20-2026-04-24';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -731,15 +731,13 @@ async function uploadFile(item) {
   // Stap 1: init via POST /files/fs/upload?parentId=X&name=Y&size=Z met JSON-body
   // (TC weigert 'application/pdf' én 'application/octet-stream' op POST; alleen application/json passeert).
   // Response bevat uploadUrl (signed) + fileId/uploadId.
-  // TC gebruikt inconsistente casing: parentId/parentType lowercase maar Name capitalized.
-  // Fout-melding was expliciet "Missing required params Name cannot be empty".
-  const params = new URLSearchParams({
-    parentId: folder.id,
-    parentType: 'FOLDER',
-    Name: item.file.name,
-    size: String(item.file.size),
-  });
-  const initPath = '/files/fs/upload?' + params.toString();
+  // Handmatige URL-encoding: URLSearchParams gebruikt '+' voor spaces (form-urlencoded),
+  // maar TC's query-parser accepteert dat niet. encodeURIComponent geeft %20.
+  const initPath = '/files/fs/upload'
+    + '?parentId=' + encodeURIComponent(folder.id)
+    + '&parentType=FOLDER'
+    + '&name=' + encodeURIComponent(item.file.name)
+    + '&size=' + item.file.size;
   console.log('[upload] init:', item.file.name, '| path:', initPath);
 
   let initData;

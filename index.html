@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v23 — 2026-04-24 (beter folder-advies: filename-patterns + synoniemen + config-import) -->
-<script>window.__BUILD_VERSION__ = 'v23-2026-04-24';</script>
+<!-- BUILD: v24 — 2026-04-24 (Instellingen-uitleg in klare taal + hoofdletter-ongevoelige patronen) -->
+<script>window.__BUILD_VERSION__ = 'v24-2026-04-24';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -776,7 +776,8 @@ function applyFilenamePatterns(item) {
     // User-ingevulde waarde (niet-auto) niet overschrijven
     if (item.metadata[p.field] && !item.metadataAuto[p.field]) continue;
     let re;
-    try { re = new RegExp(p.regex); } catch (_) { continue; }
+    // 'i' flag default → gebruikers hoeven zich niet druk te maken over hoofdletters
+    try { re = new RegExp(p.regex, 'i'); } catch (_) { continue; }
     if (!re.test(haystack)) continue;
     // Waarde case-insensitive naar canonieke enum-casing mappen
     const match = (ENUM_VALUES[p.field] || []).find(v => v.toLowerCase() === String(p.value).toLowerCase());
@@ -1366,7 +1367,7 @@ function openConfigModal() {
       ? '<p class="sub" style="margin:8px 0 12px;">Nog geen bestandsnaam-patronen. Voeg er een toe om metadata automatisch te vullen bij het slepen van een bestand.</p>'
       : draft.filePatterns.map((p, i) => `
           <div class="rule-row pattern-row">
-            <input type="text" value="${escapeHtml(p.regex)}" data-pat-regex="${i}" placeholder="bv. (?i)\\bVO\\b" title="Regex — matcht tegen bestandsnaam + beschrijving">
+            <input type="text" value="${escapeHtml(p.regex)}" data-pat-regex="${i}" placeholder="bv. \\bVO\\b of Plattegrond" title="Woord of patroon dat in de bestandsnaam voorkomt. Hoofdletters doen er niet toe.">
             <select data-pat-field="${i}">${fieldOptionsFor(p.field)}</select>
             <input type="text" value="${escapeHtml(p.value)}" data-pat-value="${i}" placeholder="waarde" title="Waarde die bij match wordt ingevuld">
             <button class="rule-del" data-pat-del="${i}" title="Regel verwijderen">×</button>
@@ -1383,32 +1384,41 @@ function openConfigModal() {
           </div>`).join('');
 
     modal.innerHTML = `
-      <h2>Metadata-regels</h2>
-      <p class="sub">Automatisch metadata afleiden zodat je de juiste map als voorstel krijgt.</p>
+      <h2>Instellingen — metadata automatisch invullen</h2>
+      <p class="sub" style="margin-bottom:var(--s3);">Vertel de uploader hoe je bestanden herkend moeten worden, dan stelt hij de juiste map voor en vult Discipline / Fase / Status alvast in.</p>
 
-      <div id="import-box" style="background:var(--afl);border-left:3px solid var(--af);border-radius:var(--r-sm);padding:var(--s3);margin:var(--s3) 0 var(--s4);">
+      <div style="background:var(--afl);border-left:3px solid var(--af);border-radius:var(--r-sm);padding:var(--s3) var(--s4);margin:0 0 var(--s4);font-size:var(--fs-sm);line-height:1.5;">
+        <strong>Voorbeeld:</strong> je bestand heet <code>TTP-UO-101 Plattegrond.pdf</code> en moet in
+        <code>A. Project informatie / 3.5 Uitvoeringsontwerp / 00.02 Architect / 03 Definitief</code>.
+        Met de juiste instellingen herkent de uploader <em>UO</em> = Uitvoeringsontwerp, snapt uit de mapstructuur wat Discipline en Status zijn, en zet het bestand automatisch in de goede map.
+      </div>
+
+      <div id="import-box" style="background:var(--gr);border:1px solid var(--hl-light);border-radius:var(--r-sm);padding:var(--s3);margin:0 0 var(--s5);">
         <div style="display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap;">
-          <span style="font-size:var(--fs-sm);color:var(--dk);font-weight:500;">📥 Importeer van ander project:</span>
+          <span style="font-size:var(--fs-sm);color:var(--dk);font-weight:500;">📥 Instellingen overnemen van ander project:</span>
           <select id="import-project" style="flex:1;min-width:200px;padding:6px 8px;border:1px solid var(--hl);border-radius:var(--r-sm);font-family:'Poppins',sans-serif;font-size:var(--fs-sm);background:#fff;">
-            <option value="">— kiezen —</option>
+            <option value="">— kies project —</option>
           </select>
           <button type="button" class="btn btn-ghost" id="import-btn" style="padding:6px 14px;font-size:var(--fs-sm);">Haal op</button>
         </div>
-        <div id="import-msg" style="font-size:var(--fs-xs);color:var(--g5);margin-top:6px;"></div>
+        <div id="import-msg" style="font-size:var(--fs-xs);color:var(--g5);margin-top:6px;">Eerder ingesteld in een ander project? Neem het hier met één klik over.</div>
       </div>
 
-      <h3 style="font-size:14px;margin:18px 0 4px;font-family:'Montserrat',sans-serif;">Pad → metadata</h3>
-      <p class="sub" style="margin:0 0 8px;">Per mapniveau: welk veld komt uit die map-naam. Niveau 1 = eerste map onder projectroot.</p>
+      <h3 style="font-size:14px;margin:18px 0 4px;font-family:'Montserrat',sans-serif;">1. Welke mapniveau = welk veld?</h3>
+      <p class="sub" style="margin:0 0 var(--s1);">Projectmappen liggen in een vaste volgorde. Vertel de uploader welk mapniveau bij welk metadata-veld hoort.</p>
+      <p class="sub" style="margin:0 0 var(--s3);font-size:var(--fs-xs);">Voorbeeld: pad <code>A / 3.5 Uitvoeringsontwerp / 00.02 Architect / 03 Definitief</code> — dan is niveau <strong>2 = Fase</strong>, niveau <strong>3 = Discipline</strong>, niveau <strong>4 = Status</strong>. (Niveau 1 is hier de hoofdmap <code>A</code>, vaak niet relevant.)</p>
       <div id="rules-list">${rulesHtml}</div>
       <button type="button" class="add-rule" id="add-rule-btn">+ Regel toevoegen</button>
 
-      <h3 style="font-size:14px;margin:22px 0 4px;font-family:'Montserrat',sans-serif;">Bestandsnaam → metadata</h3>
-      <p class="sub" style="margin:0 0 8px;">Regex-patroon matcht tegen bestandsnaam + beschrijving. Bv. <code>(?i)\\bUO\\b</code> → Fase = Uitvoeringsontwerp.</p>
+      <h3 style="font-size:14px;margin:22px 0 4px;font-family:'Montserrat',sans-serif;">2. Herken afkortingen in bestandsnamen</h3>
+      <p class="sub" style="margin:0 0 var(--s1);">Zet een term uit de bestandsnaam om in een metadata-waarde. Hoofdletters doen er niet toe.</p>
+      <p class="sub" style="margin:0 0 var(--s3);font-size:var(--fs-xs);">Voorbeeld: typ in "Zoek" het woord <code>UO</code>, kies "Fase" en vul <code>Uitvoeringsontwerp</code> in. Bij elk bestand waar "UO" in staat (zoals <code>TTP-UO-101.pdf</code>) wordt de fase direct ingevuld. Tip: gebruik <code>\\bUO\\b</code> om alleen het losse woord UO te matchen (niet "plaUOrder" o.i.d.).</p>
       <div id="patterns-list">${patternsHtml}</div>
       <button type="button" class="add-rule" id="add-pattern-btn">+ Patroon toevoegen</button>
 
-      <h3 style="font-size:14px;margin:22px 0 4px;font-family:'Montserrat',sans-serif;">Synoniemen</h3>
-      <p class="sub" style="margin:0 0 8px;">Map afkortingen in mapnamen naar de canonieke metadata-waarde. Bv. <code>VO</code> → <code>Voorlopig ontwerp</code>.</p>
+      <h3 style="font-size:14px;margin:22px 0 4px;font-family:'Montserrat',sans-serif;">3. Vertaal afkortingen in mapnamen</h3>
+      <p class="sub" style="margin:0 0 var(--s1);">Als de echte mapnamen afkortingen gebruiken (bv. <code>3.2 VO</code>) maar de metadata-waarde voluit is (<code>Voorlopig ontwerp</code>), vertel hier dat die hetzelfde betekenen.</p>
+      <p class="sub" style="margin:0 0 var(--s3);font-size:var(--fs-xs);">Voorbeeld: <code>VO</code> → <code>Voorlopig ontwerp</code>, <code>ARC</code> → <code>Architect</code>. Zonder deze vertaling ziet de uploader <code>3.2 VO</code> niet als Fase = Voorlopig ontwerp.</p>
       <div id="synonyms-list">${synonymsHtml}</div>
       <button type="button" class="add-rule" id="add-synonym-btn">+ Synoniem toevoegen</button>
 

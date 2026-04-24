@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v20 — 2026-04-24 (handmatige URL-encoding %20 ipv + voor query-params) -->
-<script>window.__BUILD_VERSION__ = 'v20-2026-04-24';</script>
+<!-- BUILD: v21 — 2026-04-24 (3-staps TC upload flow: initiate → PUT → commit) -->
+<script>window.__BUILD_VERSION__ = 'v21-2026-04-24';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -728,61 +728,78 @@ async function uploadFile(item) {
 
   await _ensureValidToken();
 
-  // Stap 1: init via POST /files/fs/upload?parentId=X&name=Y&size=Z met JSON-body
-  // (TC weigert 'application/pdf' én 'application/octet-stream' op POST; alleen application/json passeert).
-  // Response bevat uploadUrl (signed) + fileId/uploadId.
-  // Handmatige URL-encoding: URLSearchParams gebruikt '+' voor spaces (form-urlencoded),
-  // maar TC's query-parser accepteert dat niet. encodeURIComponent geeft %20.
-  const initPath = '/files/fs/upload'
-    + '?parentId=' + encodeURIComponent(folder.id)
-    + '&parentType=FOLDER'
-    + '&name=' + encodeURIComponent(item.file.name)
-    + '&size=' + item.file.size;
-  console.log('[upload] init:', item.file.name, '| path:', initPath);
+  // TC upload-flow (zelfde als TCWEB UI): 3-staps
+  // 1) POST /files/fs/initiate  → { uploadId, url }
+  // 2) PUT <signed url> (op dataocean.trimblecloud.com, geen auth)
+  // 3) POST /files/fs/commit { uploadId } → { id, name, ... }
 
-  let initData;
+  // Stap 1: initiate
+  let initResp;
   try {
-    initData = await tcFetch(initPath, {
+    initResp = await tcFetch('/files/fs/initiate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-trimbleconnect-client': 'TCWEB',
+      },
+      body: JSON.stringify({
+        parentId: folder.id,
+        parentType: 'FOLDER',
+        name: item.file.name,
+      }),
     });
-    console.log('[upload] init response:', JSON.stringify(initData).slice(0, 500));
   } catch (e) {
-    throw new Error('Init mislukt: ' + e.message);
+    throw new Error('Initiate mislukt: ' + e.message);
   }
+  const uploadUrl = initResp.url || initResp.uploadUrl || initResp.signedUrl;
+  const uploadId = initResp.uploadId || initResp.id;
+  console.log('[upload] initiate OK:', item.file.name, '| uploadId:', uploadId, '| host:', uploadUrl && uploadUrl.split('/')[2]);
+  if (!uploadUrl) throw new Error('Geen uploadUrl in initiate-response: ' + JSON.stringify(initResp).slice(0, 400));
+  if (!uploadId) throw new Error('Geen uploadId in initiate-response: ' + JSON.stringify(initResp).slice(0, 400));
 
-  const uploadUrl = initData.uploadUrl || initData.upload_url || initData.url || initData.signedUrl;
-  const fileId = initData.id || initData.fileId || initData.versionId || initData.uploadId;
-  if (!uploadUrl) {
-    throw new Error('Geen uploadUrl in response. Keys: [' + Object.keys(initData || {}).join(', ') + '] | Full: ' + JSON.stringify(initData).slice(0, 400));
-  }
-  console.log('[upload] init OK | uploadUrl host:', uploadUrl.split('/')[2], '| fileId:', fileId);
-
-  item.progress = 10;
+  item.progress = 8;
   renderQueue();
 
-  // Stap 2: PUT binary naar signed uploadUrl (geen Bearer — URL is al signed)
+  // Stap 2: PUT bytes naar signed URL (geen Bearer — URL is signed; content-type zoals TCWEB)
   await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        item.progress = 10 + Math.round((e.loaded / e.total) * 85);
+        item.progress = 8 + Math.round((e.loaded / e.total) * 82);
         renderQueue();
       }
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error('PUT binary ' + xhr.status + ': ' + (xhr.responseText || '').slice(0, 200)));
+      else reject(new Error('PUT ' + xhr.status + ': ' + (xhr.responseText || '').slice(0, 200)));
     };
     xhr.onerror = () => reject(new Error('Netwerkfout tijdens binary-upload'));
     xhr.send(item.file);
   });
 
+  item.progress = 92;
+  renderQueue();
+
+  // Stap 3: commit
+  let commitResp;
+  try {
+    commitResp = await tcFetch('/files/fs/commit', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-trimbleconnect-client': 'TCWEB',
+      },
+      body: JSON.stringify({ uploadId }),
+    });
+  } catch (e) {
+    throw new Error('Commit mislukt (bestand is geüpload maar niet bevestigd): ' + e.message);
+  }
+
   item.progress = 100;
-  item.fileId = fileId;
-  console.log('[upload] done:', item.file.name, '| fileId:', fileId);
+  item.fileId = commitResp.id || commitResp.fileId || commitResp.versionId || uploadId;
+  console.log('[upload] done:', item.file.name, '| fileId:', item.fileId, '| commit-keys:', Object.keys(commitResp));
 
   // Metadata via PSet changeset (alleen als er velden zijn)
   const props = {};

@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v21 — 2026-04-24 (3-staps TC upload flow: initiate → PUT → commit) -->
-<script>window.__BUILD_VERSION__ = 'v21-2026-04-24';</script>
+<!-- BUILD: v22 — 2026-04-24 (response-veld uploadURL hoofdletters) -->
+<script>window.__BUILD_VERSION__ = 'v22-2026-04-24';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -751,7 +751,7 @@ async function uploadFile(item) {
   } catch (e) {
     throw new Error('Initiate mislukt: ' + e.message);
   }
-  const uploadUrl = initResp.url || initResp.uploadUrl || initResp.signedUrl;
+  const uploadUrl = initResp.uploadURL || initResp.uploadUrl || initResp.url || initResp.signedUrl;
   const uploadId = initResp.uploadId || initResp.id;
   console.log('[upload] initiate OK:', item.file.name, '| uploadId:', uploadId, '| host:', uploadUrl && uploadUrl.split('/')[2]);
   if (!uploadUrl) throw new Error('Geen uploadUrl in initiate-response: ' + JSON.stringify(initResp).slice(0, 400));

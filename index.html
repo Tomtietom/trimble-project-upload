@@ -7,8 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
-<!-- BUILD: v24 — 2026-04-24 (Instellingen-uitleg in klare taal + hoofdletter-ongevoelige patronen) -->
-<script>window.__BUILD_VERSION__ = 'v24-2026-04-24';</script>
+<!-- BUILD: v25 — 2026-04-24 (dropdown voor metadata-waarde in patronen + synoniemen) -->
+<script>window.__BUILD_VERSION__ = 'v25-2026-04-24';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -1353,6 +1353,15 @@ function openConfigModal() {
   const fieldOptionsFor = (selected) =>
     METADATA_FIELDS.map(f => `<option value="${f}" ${f === selected ? 'selected' : ''}>${escapeHtml(FIELD_LABEL[f])}</option>`).join('');
 
+  // Waarde-dropdown per veld: enum-waardes van dat veld. Lege optie voor "nog niks gekozen".
+  const valueOptionsFor = (field, selected) => {
+    const opts = ['<option value="">— kies waarde —</option>'];
+    for (const v of (ENUM_VALUES[field] || [])) {
+      opts.push(`<option value="${escapeHtml(v)}" ${v === selected ? 'selected' : ''}>${escapeHtml(v)}</option>`);
+    }
+    return opts.join('');
+  };
+
   const render = () => {
     const rulesHtml = draft.rules.length === 0
       ? '<p class="sub" style="margin:8px 0 12px;">Nog geen regels. Voeg er een toe om metadata automatisch af te leiden uit het pad.</p>'
@@ -1369,7 +1378,7 @@ function openConfigModal() {
           <div class="rule-row pattern-row">
             <input type="text" value="${escapeHtml(p.regex)}" data-pat-regex="${i}" placeholder="bv. \\bVO\\b of Plattegrond" title="Woord of patroon dat in de bestandsnaam voorkomt. Hoofdletters doen er niet toe.">
             <select data-pat-field="${i}">${fieldOptionsFor(p.field)}</select>
-            <input type="text" value="${escapeHtml(p.value)}" data-pat-value="${i}" placeholder="waarde" title="Waarde die bij match wordt ingevuld">
+            <select data-pat-value="${i}" title="Waarde die bij match wordt ingevuld">${valueOptionsFor(p.field, p.value)}</select>
             <button class="rule-del" data-pat-del="${i}" title="Regel verwijderen">×</button>
           </div>`).join('');
 
@@ -1379,7 +1388,7 @@ function openConfigModal() {
           <div class="rule-row pattern-row">
             <select data-syn-field="${i}">${fieldOptionsFor(s.field)}</select>
             <input type="text" value="${escapeHtml(s.alias)}" data-syn-alias="${i}" placeholder="alias (zoals in mapnaam)" title="Alias zoals die in het folder-pad verschijnt">
-            <input type="text" value="${escapeHtml(s.canonical)}" data-syn-canon="${i}" placeholder="canonieke waarde" title="Metadata-waarde die deze alias voorstelt">
+            <select data-syn-canon="${i}" title="Metadata-waarde die deze alias voorstelt">${valueOptionsFor(s.field, s.canonical)}</select>
             <button class="rule-del" data-syn-del="${i}" title="Synoniem verwijderen">×</button>
           </div>`).join('');
 
@@ -1465,11 +1474,17 @@ function openConfigModal() {
     });
     modal.querySelectorAll('select[data-pat-field]').forEach(el => {
       el.addEventListener('change', () => {
-        draft.filePatterns[Number(el.getAttribute('data-pat-field'))].field = el.value;
+        const i = Number(el.getAttribute('data-pat-field'));
+        draft.filePatterns[i].field = el.value;
+        // Waarde resetten want de opties van het nieuwe veld zijn anders
+        if (!(ENUM_VALUES[el.value] || []).includes(draft.filePatterns[i].value)) {
+          draft.filePatterns[i].value = '';
+        }
+        render();
       });
     });
-    modal.querySelectorAll('input[data-pat-value]').forEach(el => {
-      el.addEventListener('input', () => {
+    modal.querySelectorAll('select[data-pat-value]').forEach(el => {
+      el.addEventListener('change', () => {
         draft.filePatterns[Number(el.getAttribute('data-pat-value'))].value = el.value;
       });
     });
@@ -1487,7 +1502,13 @@ function openConfigModal() {
     // === Synoniemen handlers ===
     modal.querySelectorAll('select[data-syn-field]').forEach(el => {
       el.addEventListener('change', () => {
-        draft.synonyms[Number(el.getAttribute('data-syn-field'))].field = el.value;
+        const i = Number(el.getAttribute('data-syn-field'));
+        draft.synonyms[i].field = el.value;
+        // Canonical-waarde resetten als die niet meer geldig is voor nieuw veld
+        if (!(ENUM_VALUES[el.value] || []).includes(draft.synonyms[i].canonical)) {
+          draft.synonyms[i].canonical = '';
+        }
+        render();
       });
     });
     modal.querySelectorAll('input[data-syn-alias]').forEach(el => {
@@ -1495,8 +1516,8 @@ function openConfigModal() {
         draft.synonyms[Number(el.getAttribute('data-syn-alias'))].alias = el.value;
       });
     });
-    modal.querySelectorAll('input[data-syn-canon]').forEach(el => {
-      el.addEventListener('input', () => {
+    modal.querySelectorAll('select[data-syn-canon]').forEach(el => {
+      el.addEventListener('change', () => {
         draft.synonyms[Number(el.getAttribute('data-syn-canon'))].canonical = el.value;
       });
     });

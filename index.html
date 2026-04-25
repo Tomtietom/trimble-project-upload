@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>Projectinformatie toevoegen | At Fielt</title>
 <!-- BUILD: v25 — 2026-04-24 (dropdown voor metadata-waarde in patronen + synoniemen) -->
-<script>window.__BUILD_VERSION__ = 'v25-2026-04-24';</script>
+<script>window.__BUILD_VERSION__ = 'v26-2026-04-22';</script>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
 
 <!-- Trimble Connect Workspace API -->
@@ -299,12 +299,24 @@ async function init() {
       ]);
       if (typeof r === 'string' && r.length > 20) tcToken = r;
       else if (r && r.token) tcToken = r.token;
+      else if (r && r.accessToken) tcToken = r.accessToken;
     } catch (e) { console.warn('[TC] requestPermission faalde:', e.message); }
+  }
+  if (!tcToken) {
+    // 5s extra wachten op token via postMessage event-callback
+    // (de event-listener in tcAPI.connect bovenin init() vangt 'extension.accessToken')
+    console.log('[TC] Wachten op token via event...');
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 5000);
+      const check = setInterval(() => {
+        if (tcToken) { clearInterval(check); clearTimeout(timeout); resolve(); }
+      }, 200);
+    });
   }
   if (!tcToken && tcAPI.extension?.getAccessToken) {
     try { const t = await tcAPI.extension.getAccessToken(); if (t && t.length > 20) tcToken = t; } catch (e) {}
   }
-  if (!tcToken) throw new Error('Geen access token ontvangen van Trimble');
+  if (!tcToken) throw new Error('Geen access token ontvangen van Trimble. Controleer of de extensie toegang heeft tot dit project.');
   _tcTokenExp = _parseTokenExp(tcToken);
 
   // ╔══════════════════════════════════════════════════════════╗
@@ -1739,16 +1751,11 @@ function formatBytes(n) {
 document.addEventListener('DOMContentLoaded', function () {
   init().catch(function (e) {
     console.error('[Init] Fout:', e);
-    const msg = String(e && e.message || e || '');
-    // Hub 'Toegang geweigerd' of '403' → lock-scherm; overige fouten → generieke fatal
-    const isAccessDenied = /toegang|access|403|geweigerd|denied|forbidden/i.test(msg);
+    // Hub heeft bij access-deny haar eigen block-scherm al getoond (vervangt body).
+    // Hier alleen technische fouten tonen — niet zelf "Geen toegang" interpreteren.
     const loading = document.getElementById('loading');
-    if (isAccessDenied) {
-      loading.innerHTML = '<div class="fatal"><h2 style="margin:0 0 8px">Geen toegang</h2>'
-        + '<p style="color:#555;margin:0 0 12px">Je hebt geen actieve licentie voor deze extensie in dit project.</p>'
-        + '<p style="font-size:12px;color:#888">Details: ' + escapeHtml(msg) + '</p>'
-        + '<p style="margin-top:16px"><a href="mailto:info@atfielt.nl">info@atfielt.nl</a></p></div>';
-    } else {
+    if (loading) {
+      const msg = String(e && e.message || e || '');
       loading.innerHTML = '<div class="fatal"><h2 style="margin:0 0 8px">Fout bij laden</h2>'
         + '<p style="color:#555">' + escapeHtml(msg) + '</p>'
         + '<p style="margin-top:16px;font-size:12px;color:#888">Probeer de extensie te sluiten en opnieuw te openen. Blijft het probleem? <a href="mailto:info@atfielt.nl">info@atfielt.nl</a></p></div>';

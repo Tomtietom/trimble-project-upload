@@ -291,7 +291,9 @@ async function init() {
     }
   }, 15000);
 
-  tcProject = await tcAPI.project.getCurrentProject();
+  tcProject = await (tcAPI.project.getProject
+    ? tcAPI.project.getProject()
+    : tcAPI.project.getCurrentProject());
 
   // Sidebar menu — niet overschrijven als geopend vanuit cockpit (cockpit-hiërarchie blijft staan)
   if (!_fromCockpit) {
@@ -570,6 +572,24 @@ function fetchWithTimeout(url, options, timeoutMs) {
     .finally(function() { clearTimeout(id); });
 }
 
+async function _retryFetch(makeRequest, label) {
+  var r = await makeRequest();
+  if (r.status === 429) {
+    var ra = parseInt(r.headers.get('Retry-After'), 10);
+    var waitMs = (isNaN(ra) ? 2 : Math.min(ra, 30)) * 1000;
+    console.warn('[TC] 429 — wachten', waitMs, 'ms', label);
+    await new Promise(function (res) { setTimeout(res, waitMs); });
+    r = await makeRequest();
+  }
+  for (var i = 0; i < 2 && r.status >= 500 && r.status < 600; i++) {
+    var ms = 1000 * Math.pow(4, i);
+    console.warn('[TC]', r.status, '— retry over', ms, 'ms', label);
+    await new Promise(function (res) { setTimeout(res, ms); });
+    r = await makeRequest();
+  }
+  return r;
+}
+
 // ============================================================
 //  TC fetch helper
 // ============================================================
@@ -580,14 +600,17 @@ async function tcFetch(path, opts) {
     Authorization: 'Bearer ' + tcToken,
     Accept: 'application/json',
   }, opts.headers || {});
-  var r = await fetchWithTimeout(TC_API_BASE + path, {
-    method: opts.method || 'GET',
-    headers: headers,
-    body: opts.body,
-  });
-  if (r.status === 401) {
-    await _ensureValidToken();
-    r = await fetchWithTimeout(TC_API_BASE + path, { method: opts.method || 'GET', headers: Object.assign({}, headers, { Authorization: 'Bearer ' + tcToken }), body: opts.body });
+  const doFetch = function () {
+    return fetchWithTimeout(TC_API_BASE + path, {
+      method: opts.method || 'GET',
+      headers: Object.assign({}, headers, { Authorization: 'Bearer ' + tcToken }),
+      body: opts.body,
+    });
+  };
+  var r = await doFetch();
+  if (r.status === 401) { await _ensureValidToken(); r = await doFetch(); }
+  if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
+    r = await _retryFetch(doFetch, 'tcFetch ' + path);
   }
   if (!r.ok) {
     const txt = await r.text().catch(() => '');
@@ -607,14 +630,17 @@ async function tcFetchPSet(path, opts) {
     Authorization: 'Bearer ' + tcToken,
     Accept: 'application/json',
   }, opts.headers || {});
-  var r = await fetchWithTimeout(PSET_BASE + path, {
-    method: opts.method || 'GET',
-    headers: headers,
-    body: opts.body,
-  });
-  if (r.status === 401) {
-    await _ensureValidToken();
-    r = await fetchWithTimeout(PSET_BASE + path, { method: opts.method || 'GET', headers: Object.assign({}, headers, { Authorization: 'Bearer ' + tcToken }), body: opts.body });
+  const doFetch = function () {
+    return fetchWithTimeout(PSET_BASE + path, {
+      method: opts.method || 'GET',
+      headers: Object.assign({}, headers, { Authorization: 'Bearer ' + tcToken }),
+      body: opts.body,
+    });
+  };
+  var r = await doFetch();
+  if (r.status === 401) { await _ensureValidToken(); r = await doFetch(); }
+  if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
+    r = await _retryFetch(doFetch, 'tcFetchPSet ' + path);
   }
   if (!r.ok) {
     const txt = await r.text().catch(() => '');

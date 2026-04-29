@@ -151,6 +151,16 @@
 
   .empty-state{text-align:center;color:var(--g4);padding:40px var(--s5)}
   .warn{background:#fff8e8;border:1px solid #e8d89c;border-left:4px solid var(--af);color:#7a5c00;padding:var(--s3) var(--s4);border-radius:var(--r-sm);margin:var(--s4) 0;font-size:var(--fs-md)}
+
+  /* Bulk-bar — alle bestanden in queue tegelijk metadata + map geven */
+  .bulk-bar:empty{display:none}
+  .bulk-bar{background:#fff7ec;border:1px solid #f0d4a3;border-radius:var(--r-md);padding:var(--s3) var(--s4);margin:var(--s4) 0 var(--s2)}
+  .bulk-title{font-weight:600;font-size:var(--fs-md);margin-bottom:var(--s2);color:#6f4514}
+  .bulk-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--s2) var(--s3);margin-bottom:var(--s3)}
+  .bulk-fields label{display:block;font-size:var(--fs-sm);color:var(--g5);margin-bottom:3px}
+  .bulk-fields select{width:100%}
+  .bulk-actions{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}
+  .bulk-toggle{font-size:var(--fs-md);color:var(--g6);display:flex;align-items:center;gap:6px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -239,6 +249,9 @@ let uploadConfig = { rules: [], filePatterns: [], synonyms: {} };
 // filePatterns: [{ regex, field, value }]       — bestandsnaam → metadata (auto-fill bij drop)
 // synonyms:     { field: { alias: canonical } } — aliassen voor folder-matching (bv. VO → Voorlopig ontwerp)
 let _psetStats = { ok: 0, fail: 0 };
+let _bulkMeta = { discipline: '', project_fase: '', document_status: '' };
+let _bulkFolderId = '';
+let _bulkOnlyEmpty = true;
 
 // ============================================================
 //  Init
@@ -1113,6 +1126,7 @@ function renderApp() {
       <button class="pick-btn" type="button" id="pick-btn">Kies bestanden</button>
       <input type="file" id="file-input" multiple>
     </div>
+    <div class="bulk-bar" id="bulk-bar"></div>
     <div class="queue" id="queue"></div>
     <div class="actions" id="actions" style="display:none">
       <button class="btn btn-ghost" id="clear-btn">Wissen</button>
@@ -1309,6 +1323,8 @@ function renderQueue() {
       renderQueue();
     });
   });
+
+  renderBulkBar();
 }
 
 function renderFolderPicker(item, selectedFolder) {
@@ -1403,6 +1419,74 @@ function renderMetaRow(item) {
       </div>`;
   }).join('');
   return `<div class="meta-row">${parts}</div>`;
+}
+
+function renderBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  if (!bar) return;
+  const pendingCount = queue.filter(i => i.status === 'pending').length;
+  if (pendingCount < 2) { bar.innerHTML = ''; return; }
+
+  const metaSelects = METADATA_FIELDS.map(f => {
+    const opts = ['<option value="">— niet wijzigen —</option>'].concat(
+      (ENUM_VALUES[f] || []).map(v =>
+        `<option value="${escapeHtml(v)}" ${v === _bulkMeta[f] ? 'selected' : ''}>${escapeHtml(v)}</option>`)
+    ).join('');
+    return `<div><label>${escapeHtml(FIELD_LABEL[f])}</label><select data-bulk="${f}">${opts}</select></div>`;
+  }).join('');
+
+  const folderOpts = ['<option value="">— niet wijzigen —</option>'].concat(
+    writableFolders.map(f =>
+      `<option value="${escapeHtml(f.id)}" ${f.id === _bulkFolderId ? 'selected' : ''}>${escapeHtml(f.path)}</option>`)
+  ).join('');
+
+  bar.innerHTML = `
+    <div class="bulk-title">Bulk-instellen voor alle ${pendingCount} bestanden in de queue</div>
+    <div class="bulk-fields">
+      ${metaSelects}
+      <div><label>Map</label><select data-bulk="folder">${folderOpts}</select></div>
+    </div>
+    <div class="bulk-actions">
+      <label class="bulk-toggle">
+        <input type="checkbox" data-bulk="onlyEmpty" ${_bulkOnlyEmpty ? 'checked' : ''}>
+        Alleen lege velden overschrijven
+      </label>
+      <button class="btn btn-primary" data-bulk="apply">Toepassen op alle</button>
+    </div>
+  `;
+
+  bar.querySelectorAll('select[data-bulk]').forEach(el => {
+    el.addEventListener('change', () => {
+      const key = el.getAttribute('data-bulk');
+      if (key === 'folder') _bulkFolderId = el.value;
+      else if (METADATA_FIELDS.indexOf(key) >= 0) _bulkMeta[key] = el.value;
+    });
+  });
+  const cb = bar.querySelector('input[data-bulk="onlyEmpty"]');
+  if (cb) cb.addEventListener('change', () => { _bulkOnlyEmpty = cb.checked; });
+  const btn = bar.querySelector('button[data-bulk="apply"]');
+  if (btn) btn.addEventListener('click', applyBulkToAll);
+}
+
+function applyBulkToAll() {
+  const pending = queue.filter(i => i.status === 'pending');
+  if (!pending.length) return;
+  for (const item of pending) {
+    for (const f of METADATA_FIELDS) {
+      const v = _bulkMeta[f];
+      if (!v) continue;
+      if (_bulkOnlyEmpty && item.metadata[f]) continue;
+      item.metadata[f] = v;
+      item.metadataAuto[f] = false;
+    }
+    if (_bulkFolderId && !(_bulkOnlyEmpty && item.folderId)) {
+      item.folderId = _bulkFolderId;
+      item.folderAuto = false;
+      item.folderPickerOpen = false;
+    }
+    recomputeFolderSuggestion(item);
+  }
+  renderQueue();
 }
 
 // ============================================================

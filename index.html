@@ -152,6 +152,23 @@
   .empty-state{text-align:center;color:var(--g4);padding:40px var(--s5)}
   .warn{background:#fff8e8;border:1px solid #e8d89c;border-left:4px solid var(--af);color:#7a5c00;padding:var(--s3) var(--s4);border-radius:var(--r-sm);margin:var(--s4) 0;font-size:var(--fs-md)}
 
+  /* Laadscherm — At Fielt card met stap-voor-stap status, identiek patroon aan project-dashboard / tc-viewer */
+  .loading-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;padding:40px var(--s5)}
+  .loading-card{background:#fff;border-radius:14px;padding:36px var(--s5);max-width:460px;width:100%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.06);border:1px solid var(--hl-light)}
+  .loading-title{font-family:'Montserrat',sans-serif;font-weight:600;font-size:var(--fs-lg);color:var(--dk);margin:0 0 var(--s4)}
+  .loading-steps{text-align:left;margin:var(--s3) 0}
+  .loading-steps .step{display:flex;align-items:center;gap:var(--s2);padding:6px 0;font-size:var(--fs-md);color:var(--g5);opacity:.45;transition:opacity .25s,color .25s}
+  .loading-steps .step .si{display:inline-block;width:18px;text-align:center;font-size:14px}
+  .loading-steps .step.active{opacity:1;color:var(--dk)}
+  .loading-steps .step.done{opacity:.85;color:var(--ok,#2e7d32)}
+  .loading-steps .step.error{opacity:1;color:var(--warn,#c62828)}
+  .progress-track{width:100%;height:6px;background:var(--gr);border-radius:3px;margin:var(--s3) 0 var(--s2);overflow:hidden}
+  .progress-fill{height:100%;background:var(--af);width:0;transition:width .3s}
+  .loading-error{margin-top:var(--s3);padding:var(--s3);background:#fff5f5;border-left:3px solid var(--warn,#c62828);border-radius:var(--r-sm);font-size:var(--fs-sm);color:#7a1d1d;text-align:left}
+
+  /* Sticky upload-knop — blijft zichtbaar bij lange queues */
+  .actions{position:sticky;bottom:0;background:#fff;padding:var(--s3) 0;border-top:1px solid var(--hl-light);z-index:5}
+
   /* Bulk-bar — alle bestanden in queue tegelijk metadata + map geven */
   .bulk-bar:empty{display:none}
   .bulk-bar{background:#fff7ec;border:1px solid #f0d4a3;border-radius:var(--r-md);padding:var(--s3) var(--s4);margin:var(--s4) 0 var(--s2)}
@@ -161,6 +178,11 @@
   .bulk-fields select{width:100%}
   .bulk-actions{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}
   .bulk-toggle{font-size:var(--fs-md);color:var(--g6);display:flex;align-items:center;gap:6px;cursor:pointer}
+  .bulk-suggestion{font-size:var(--fs-sm);color:var(--g5);background:var(--afl);border-left:3px solid var(--af);padding:8px var(--s3);border-radius:var(--r-sm);margin:0 0 var(--s3);display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+  .bulk-suggestion strong{color:var(--dk);font-weight:600}
+  .bulk-suggestion-btn{background:#fff;border:1px solid var(--af);color:var(--af);padding:3px 12px;border-radius:var(--r-pill);cursor:pointer;font-size:var(--fs-sm);font-family:'Poppins',sans-serif;font-weight:500;transition:all .15s}
+  .bulk-suggestion-btn:hover{background:var(--af);color:#fff}
+  .bulk-suggestion-tag{font-size:var(--fs-xs);color:var(--af);font-weight:600;text-transform:uppercase;letter-spacing:.4px}
 </style>
 </head>
 <body>
@@ -172,7 +194,18 @@
   <span class="spacer"></span>
   <button class="action-btn sec" id="cfg-btn" type="button" title="Metadata-regels instellen">⚙ Instellingen</button>
 </header>
-<div id="loading" class="loading">Laden…</div>
+<div class="loading-screen" id="loading-screen">
+  <div class="loading-card">
+    <div class="loading-title">Projectinformatie laden</div>
+    <div class="loading-steps">
+      <div class="step active" id="step1"><span class="si">⏳</span><span>Verbinden met Trimble Connect…</span></div>
+      <div class="step" id="step2"><span class="si">○</span><span>Project en toegang laden…</span></div>
+      <div class="step" id="step3"><span class="si">○</span><span>Mappen en rechten ophalen…</span></div>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="loadProgressFill"></div></div>
+    <div class="loading-error" id="loading-error" style="display:none"></div>
+  </div>
+</div>
 <div id="app" class="app" style="display:none"></div>
 
 <script>
@@ -304,6 +337,10 @@ async function init() {
     }
   }, 15000);
 
+  updateStep(1, 'done', 'Verbonden met Trimble Connect');
+  setLoadProgress(25);
+  updateStep(2, 'active', 'Project en toegang laden…');
+
   tcProject = await (tcAPI.project.getProject
     ? tcAPI.project.getProject()
     : tcAPI.project.getCurrentProject());
@@ -393,12 +430,18 @@ async function init() {
   // ║  EINDE AT FIELT HUB BLOK                                 ║
   // ╚══════════════════════════════════════════════════════════╝
 
+  updateStep(2, 'done', 'Project: ' + (tcProject.name || 'onbekend'));
+  setLoadProgress(60);
+  updateStep(3, 'active', 'Mappen en rechten ophalen…');
+
   // Folder-tree ophalen en filteren op schrijfrechten
-  document.getElementById('loading').textContent = 'Mappen ophalen en rechten controleren…';
   writableFolders = await fetchWritableFolders();
 
   // Project-config voor pad-naar-metadata-regels
   await loadUploadConfig();
+
+  updateStep(3, 'done', writableFolders.length + ' map' + (writableFolders.length === 1 ? '' : 'pen') + ' met schrijfrechten');
+  setLoadProgress(100);
 
   if (window.atfieltHub) {
     // data-loaded als feature-action (hub accepteert alleen type='feature' of 'error')
@@ -1103,7 +1146,8 @@ async function uploadAll() {
 // ============================================================
 function renderApp() {
   console.log('[upload] renderApp() called — writable folders:', writableFolders.length, '| DOM app element:', !!document.getElementById('app'));
-  document.getElementById('loading').style.display = 'none';
+  const _ls = document.getElementById('loading-screen');
+  if (_ls) _ls.style.display = 'none';
   const hdr = document.getElementById('hdr');
   if (hdr) {
     hdr.style.display = '';
@@ -1440,12 +1484,31 @@ function renderBulkBar() {
       `<option value="${escapeHtml(f.id)}" ${f.id === _bulkFolderId ? 'selected' : ''}>${escapeHtml(f.path)}</option>`)
   ).join('');
 
+  // Map-suggestie op basis van de huidige bulk-metadata (zelfde scoring als per item)
+  let suggestionHtml = '';
+  if (METADATA_FIELDS.some(f => _bulkMeta[f])) {
+    const dummy = { metadata: _bulkMeta, file: { name: '' }, description: '' };
+    const top = writableFolders
+      .map(f => ({ folder: f, score: scoreFolder(f, dummy) }))
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score)[0];
+    if (top) {
+      const isCurrent = top.folder.id === _bulkFolderId;
+      suggestionHtml = `<div class="bulk-suggestion">💡 Suggestie: <strong>${escapeHtml(top.folder.path)}</strong>`
+        + (isCurrent
+          ? ' <span class="bulk-suggestion-tag">geselecteerd</span>'
+          : ` <button class="bulk-suggestion-btn" data-bulk="apply-suggestion" data-folder-id="${escapeHtml(top.folder.id)}">Gebruik deze map</button>`)
+        + `</div>`;
+    }
+  }
+
   bar.innerHTML = `
     <div class="bulk-title">Bulk-instellen voor alle ${pendingCount} bestanden in de queue</div>
     <div class="bulk-fields">
       ${metaSelects}
       <div><label>Map</label><select data-bulk="folder">${folderOpts}</select></div>
     </div>
+    ${suggestionHtml}
     <div class="bulk-actions">
       <label class="bulk-toggle">
         <input type="checkbox" data-bulk="onlyEmpty" ${_bulkOnlyEmpty ? 'checked' : ''}>
@@ -1458,14 +1521,19 @@ function renderBulkBar() {
   bar.querySelectorAll('select[data-bulk]').forEach(el => {
     el.addEventListener('change', () => {
       const key = el.getAttribute('data-bulk');
-      if (key === 'folder') _bulkFolderId = el.value;
-      else if (METADATA_FIELDS.indexOf(key) >= 0) _bulkMeta[key] = el.value;
+      if (key === 'folder') { _bulkFolderId = el.value; renderBulkBar(); }
+      else if (METADATA_FIELDS.indexOf(key) >= 0) { _bulkMeta[key] = el.value; renderBulkBar(); }
     });
   });
   const cb = bar.querySelector('input[data-bulk="onlyEmpty"]');
   if (cb) cb.addEventListener('change', () => { _bulkOnlyEmpty = cb.checked; });
   const btn = bar.querySelector('button[data-bulk="apply"]');
   if (btn) btn.addEventListener('click', applyBulkToAll);
+  const sugBtn = bar.querySelector('button[data-bulk="apply-suggestion"]');
+  if (sugBtn) sugBtn.addEventListener('click', () => {
+    _bulkFolderId = sugBtn.getAttribute('data-folder-id') || '';
+    renderBulkBar();
+  });
 }
 
 function applyBulkToAll() {
@@ -1873,6 +1941,20 @@ function renderPathPreview(item, folder) {
 // ============================================================
 //  Helpers
 // ============================================================
+function updateStep(num, status, text) {
+  const el = document.getElementById('step' + num);
+  if (!el) return;
+  const icons = { active: '⏳', done: '✓', error: '✗', pending: '○' };
+  const icon = icons[status] || '○';
+  el.className = 'step' + (status === 'pending' ? '' : ' ' + status);
+  el.innerHTML = '<span class="si">' + icon + '</span><span>' + escapeHtml(text) + '</span>';
+}
+
+function setLoadProgress(pct) {
+  const el = document.getElementById('loadProgressFill');
+  if (el) el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+}
+
 function waitForWorkspaceAPI(maxWait) {
   return new Promise(function (resolve, reject) {
     let api = window.WorkspaceAPI || window.Extensions || window.TrimbleConnectWorkspace;
@@ -1905,12 +1987,14 @@ document.addEventListener('DOMContentLoaded', function () {
     console.error('[Init] Fout:', e);
     // Hub heeft bij access-deny haar eigen block-scherm al getoond (vervangt body).
     // Hier alleen technische fouten tonen — niet zelf "Geen toegang" interpreteren.
-    const loading = document.getElementById('loading');
-    if (loading) {
+    const errBox = document.getElementById('loading-error');
+    if (errBox) {
+      const active = document.querySelector('.loading-steps .step.active');
+      if (active) { active.classList.remove('active'); active.classList.add('error'); }
       const msg = String(e && e.message || e || '');
-      loading.innerHTML = '<div class="fatal"><h2 style="margin:0 0 8px">Fout bij laden</h2>'
-        + '<p style="color:#555">' + escapeHtml(msg) + '</p>'
-        + '<p style="margin-top:16px;font-size:12px;color:#888">Probeer de extensie te sluiten en opnieuw te openen. Blijft het probleem? <a href="mailto:info@atfielt.nl">info@atfielt.nl</a></p></div>';
+      errBox.style.display = '';
+      errBox.innerHTML = '<strong>Fout bij laden</strong><br>' + escapeHtml(msg)
+        + '<br><br><span style="font-size:12px;color:#888">Probeer de extensie te sluiten en opnieuw te openen. Blijft het probleem? <a href="mailto:info@atfielt.nl">info@atfielt.nl</a></span>';
     }
   });
 });
